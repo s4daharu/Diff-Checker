@@ -4,6 +4,7 @@ import { CheckIcon, CopyIcon, DownloadIcon } from './Icons';
 interface StatsBarProps {
   stats: DiffStats | null;
   identical: boolean;
+  timeMs?: number;
   onCopyPatch: () => void;
   onDownloadPatch: () => void;
   patchReady: boolean;
@@ -13,6 +14,7 @@ interface StatsBarProps {
 export function StatsBar({
   stats,
   identical,
+  timeMs,
   onCopyPatch,
   onDownloadPatch,
   patchReady,
@@ -50,6 +52,7 @@ export function StatsBar({
         </span>
         <span className="statsbar__sizes">
           {stats.oldLines} → {stats.newLines} lines
+          {timeMs != null && ` · ${Math.round(timeMs)} ms`}
         </span>
       </div>
       <div className="statsbar__actions">

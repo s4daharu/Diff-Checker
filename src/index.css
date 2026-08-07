@@ -574,6 +574,16 @@ body {
   grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
 }
 
+.diff-view--side.no-line-nums .diff-col-head,
+.diff-view--side.no-line-nums .diff-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.diff-view--inline.no-line-nums .diff-col-head,
+.diff-view--inline.no-line-nums .diff-row {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
 .ln {
   min-width: 46px;
   padding: 0 10px;
@@ -690,6 +700,22 @@ body {
 
 .gap-dots {
   letter-spacing: 2px;
+}
+
+/* ---------- Drop overlay ---------- */
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
 }
 
 /* ---------- Empty state / notices ---------- */

@@ -17,6 +17,16 @@ with all diff computation happening in a Web Worker.
 - Dark mode, wrap toggle, line numbers toggle
 - Inputs and preferences persisted in `localStorage`
 
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl/⌘ + 1` | Side-by-side view |
+| `Ctrl/⌘ + 2` | Inline view |
+| `Ctrl/⌘ + S` | Download `.patch` |
+| `Ctrl/⌘ + E` | Focus the Original text panel |
+| `←` / `→` | Switch view from the view-mode tabs |
+
 ## Getting started
 
 ```sh

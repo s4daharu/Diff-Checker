@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 const PORT = 4173;
@@ -186,6 +187,75 @@ const cleared = (await ta.inputValue()) === '' && (await ta2.inputValue()) === '
 const themeAfterNew = await page.evaluate(() => document.documentElement.dataset.theme);
 check('new diff clears panels', cleared);
 check('new diff keeps theme', themeBeforeNew === themeAfterNew, `${themeBeforeNew} → ${themeAfterNew}`);
+
+// keyboard shortcuts: ctrl/cmd+2 inline, ctrl/cmd+1 side-by-side
+await page.getByRole('button', { name: 'Try with sample text' }).click();
+await page.waitForSelector('.diff-view--side', { timeout: 5000 });
+await page.keyboard.press('Control+2');
+await page.waitForSelector('.diff-view--inline');
+check('ctrl+2 switches to inline view', true);
+await page.keyboard.press('Control+1');
+await page.waitForSelector('.diff-view--side');
+check('ctrl+1 switches to side-by-side view', true);
+
+// arrow keys navigate the view-mode tablist
+await page.locator('.segmented__btn').first().focus();
+await page.keyboard.press('ArrowRight');
+await page.waitForSelector('.diff-view--inline');
+check('arrow right switches view', true);
+await page.locator('.segmented__btn').last().focus();
+await page.keyboard.press('ArrowLeft');
+await page.waitForSelector('.diff-view--side');
+
+// ctrl+s downloads the patch
+const dlPromise = page.waitForEvent('download');
+await page.keyboard.press('Control+s');
+const dl = await dlPromise;
+check('ctrl+s downloads patch', dl.suggestedFilename() === 'diff.patch', dl.suggestedFilename());
+
+// drop anywhere: files dropped on the page land in the nearer panel
+await page.evaluate(() => {
+  const dt = new DataTransfer();
+  dt.items.add(new File(['dropped left\ncontent\n'], 'dropped.txt', { type: 'text/plain' }));
+  document.dispatchEvent(
+    new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: 100 }),
+  );
+});
+await page.waitForTimeout(400);
+const droppedVal = await ta.inputValue();
+check('drop anywhere fills left panel', droppedVal === 'dropped left\ncontent\n', droppedVal);
+
+// render cap: very large diffs show the first N rows with a notice
+let huge = '';
+for (let i = 0; i < 25000; i++) huge += `row ${i}\n`;
+await setValue(ta, huge);
+await setValue(ta2, huge);
+await page.waitForSelector('.notice--muted >> text=Showing the first', { timeout: 20000 });
+const capText = await page.locator('.notice--muted').textContent();
+check('render cap notice shows', !!capText && capText.includes('12,000'), capText);
+const rendered = await page.locator('.diff-row--equal').count();
+check('render cap limits rows', rendered >= 11900 && rendered <= 12100, `rows=${rendered}`);
+await page.getByRole('button', { name: 'Render all' }).click();
+await page.waitForTimeout(2000);
+const allRows = await page.locator('.diff-row--equal').count();
+check('render all renders every row', allRows >= 24000, `rows=${allRows}`);
+
+// uploaded file name appears in the patch header
+const chooser2Promise = page.waitForEvent('filechooser');
+await page.locator('.input-panel--left').getByRole('button', { name: 'Open file' }).click();
+const chooser2 = await chooser2Promise;
+await chooser2.setFiles({
+  name: 'orig.txt',
+  mimeType: 'text/plain',
+  buffer: Buffer.from('a\nb\n'),
+});
+await page.waitForTimeout(800);
+const dl2Promise = page.waitForEvent('download');
+await page.locator('.statsbar__actions .btn').nth(1).click();
+const dl2 = await dl2Promise;
+const dl2Path = await dl2.path();
+const patchText = readFileSync(dl2Path, 'utf8');
+check('patch header uses uploaded name', patchText.includes('--- orig.txt'), patchText.split('\n')[0]);
 
 check('no errors accumulated', errors.length === 0, errors.join(' | '));
 

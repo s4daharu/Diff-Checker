@@ -10,6 +10,7 @@ interface InputPanelProps {
   value: string;
   onChange: (value: string) => void;
   onError: (message: string) => void;
+  onFileInfo?: (fileName: string | null) => void;
   placeholder?: string;
 }
 
@@ -19,9 +20,11 @@ export function InputPanel({
   value,
   onChange,
   onError,
+  onFileInfo,
   placeholder,
 }: InputPanelProps) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0);
   const [dragOver, setDragOver] = useState(false);
 
   const handleFile = async (file: File | undefined | null) => {
@@ -32,6 +35,7 @@ export function InputPanel({
     }
     try {
       onChange(await file.text());
+      onFileInfo?.(file.name);
     } catch {
       onError(`Could not read "${file.name}".`);
     }
@@ -39,8 +43,15 @@ export function InputPanel({
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    dragDepth.current = 0;
     setDragOver(false);
     handleFile(e.dataTransfer.files?.[0]);
+  };
+
+  const onDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOver(false);
   };
 
   const chars = value.length;
@@ -50,11 +61,13 @@ export function InputPanel({
     <section className={`panel input-panel input-panel--${accent}`}>
       <div
         className="input-panel__dropzone"
-        onDragOver={(e) => {
+        onDragEnter={(e) => {
           e.preventDefault();
+          dragDepth.current++;
           setDragOver(true);
         }}
-        onDragLeave={() => setDragOver(false)}
+        onDragOver={(e) => e.preventDefault()}
+        onDragLeave={onDragLeave}
         onDrop={onDrop}
         data-dragover={dragOver || undefined}
       >
@@ -86,7 +99,10 @@ export function InputPanel({
         <textarea
           className="input-panel__textarea"
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => {
+            onChange(e.target.value);
+            onFileInfo?.(null);
+          }}
           placeholder={
             placeholder ?? 'Paste text here, or drop a file onto this panel…'
           }

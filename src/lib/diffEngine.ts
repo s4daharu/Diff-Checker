@@ -315,11 +315,13 @@ export function computeDiff(
 export function buildUnifiedPatch(
   rows: DiffRow[],
   context: number | 'all',
+  oldName = 'original.txt',
+  newName = 'changed.txt',
 ): string {
   const trimmed = applyContext(rows, context);
   const maxContext = context === 'all' ? Infinity : context;
 
-  const lines: string[] = ['--- original.txt', '+++ changed.txt'];
+  const lines: string[] = [`--- ${oldName}`, `+++ ${newName}`];
   let prevOld = 0;
   let prevNew = 0;
   let equalBuffer: DiffRow[] = [];

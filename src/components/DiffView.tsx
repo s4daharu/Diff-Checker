@@ -68,7 +68,7 @@ function GapRow({ row }: { row: DiffRow }) {
 
 function SideBySide({ rows, wrap, lineNumbers }: DiffViewProps) {
   return (
-    <div className="diff-view diff-view--side">
+    <div className={`diff-view diff-view--side${lineNumbers ? '' : ' no-line-nums'}`}>
       <div className="diff-col-head">
         {lineNumbers && <span className="ln ln--head" />}
         <span className="col-title col-title--old">Original</span>
@@ -103,7 +103,7 @@ function InlineView({ rows, wrap, lineNumbers }: DiffViewProps) {
   }
 
   return (
-    <div className="diff-view diff-view--inline">
+    <div className={`diff-view diff-view--inline${lineNumbers ? '' : ' no-line-nums'}`}>
       <div className="diff-col-head diff-col-head--inline">
         {lineNumbers && <span className="ln ln--head" />}
         <span className="ln ln--head" />

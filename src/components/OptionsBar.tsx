@@ -138,7 +138,16 @@ export function OptionsBar({
       </div>
 
       <div className="optionsbar__group optionsbar__group--end">
-        <div className="segmented" role="tablist" aria-label="View mode">
+        <div
+          className="segmented"
+          role="tablist"
+          aria-label="View mode"
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+            e.preventDefault();
+            onViewModeChange(viewMode === 'side-by-side' ? 'inline' : 'side-by-side');
+          }}
+        >
           <button
             type="button"
             role="tab"

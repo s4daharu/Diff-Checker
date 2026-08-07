@@ -19,6 +19,7 @@ import {
 } from './lib/storage';
 import { SAMPLE_CHANGED, SAMPLE_ORIGINAL } from './lib/sample';
 import { applyContext } from './lib/diffEngine';
+import { MAX_FILE_BYTES } from './components/InputPanel';
 
 type Theme = 'light' | 'dark';
 
@@ -31,9 +32,18 @@ interface WorkerResponse {
 }
 
 const DEBOUNCE_MS = 250;
+const RENDER_CAP = 12000;
 
-function usePersistedState<T>(key: string, fallback: T): [T, (v: T) => void] {
-  const [value, setValue] = useState<T>(() => loadJson(key, fallback));
+function usePersistedState<T>(
+  key: string,
+  fallback: T,
+  sanitize?: (raw: unknown) => T,
+): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    const raw = loadJson(key, null);
+    if (raw === null) return fallback;
+    return sanitize ? sanitize(raw) : (raw as T);
+  });
   const setPersisted = useCallback(
     (next: T) => {
       setValue(next);
@@ -42,6 +52,22 @@ function usePersistedState<T>(key: string, fallback: T): [T, (v: T) => void] {
     [key],
   );
   return [value, setPersisted];
+}
+
+function sanitizeOptions(raw: unknown): DiffOptions {
+  const o = (raw ?? {}) as Partial<DiffOptions>;
+  return {
+    ignoreCase: o.ignoreCase === true,
+    ignoreWhitespace: o.ignoreWhitespace === true,
+    ignoreLineEndings: o.ignoreLineEndings === true,
+    context:
+      o.context === 'all'
+        ? 'all'
+        : typeof o.context === 'number' && Number.isFinite(o.context)
+          ? o.context
+          : DEFAULT_OPTIONS.context,
+    granularity: o.granularity === 'words' ? 'words' : 'chars',
+  };
 }
 
 function getInitialTheme(): Theme {
@@ -58,15 +84,22 @@ export default function App() {
   const [options, setOptions] = usePersistedState<DiffOptions>(
     storageKeys.options,
     DEFAULT_OPTIONS,
+    sanitizeOptions,
   );
   const [viewMode, setViewMode] = usePersistedState<ViewMode>(
     storageKeys.viewMode,
     'side-by-side',
+    (v) => (v === 'inline' ? 'inline' : 'side-by-side'),
   );
-  const [wrap, setWrap] = usePersistedState(storageKeys.wrap, false);
+  const [wrap, setWrap] = usePersistedState(
+    storageKeys.wrap,
+    false,
+    (v) => v === true,
+  );
   const [lineNumbers, setLineNumbers] = usePersistedState(
     storageKeys.lineNumbers,
     true,
+    (v) => v === true,
   );
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
 
@@ -75,16 +108,43 @@ export default function App() {
   const [patch, setPatch] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [renderAll, setRenderAll] = useState(false);
+  const [globalDrag, setGlobalDrag] = useState(false);
+  const [fileNames, setFileNames] = useState<{
+    old: string | null;
+    new: string | null;
+  }>({ old: null, new: null });
 
   const workerRef = useRef<Worker | null>(null);
   const seqRef = useRef(0);
   const toastTimerRef = useRef<number | undefined>(undefined);
+  const themeOverridden = useRef(loadString(storageKeys.theme, '') !== '');
 
   const showToast = useCallback((message: string) => {
     setToast(message);
     window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 4000);
   }, []);
+
+  const makeWorker = useCallback(() => {
+    const w = new Worker(
+      new URL('./diffWorker.ts', import.meta.url),
+      { type: 'module' },
+    );
+    w.onmessage = (e: MessageEvent<WorkerResponse>) => {
+      const msg = e.data;
+      if (msg.id !== seqRef.current) return;
+      setComputing(false);
+      if (!msg.ok) {
+        setResult(null);
+        showToast(msg.error ?? 'Something went wrong while diffing.');
+        return;
+      }
+      setResult(msg.result ?? null);
+      setPatch(msg.patch ?? null);
+    };
+    return w;
+  }, [showToast]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -104,43 +164,84 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!workerRef.current) {
-      workerRef.current = new Worker(
-        new URL('./diffWorker.ts', import.meta.url),
-        { type: 'module' },
-      );
-      workerRef.current.onmessage = (e: MessageEvent<WorkerResponse>) => {
-        const msg = e.data;
-        if (msg.id !== seqRef.current) return;
-        setComputing(false);
-        if (!msg.ok) {
-          setResult(null);
-          showToast(msg.error ?? 'Something went wrong while diffing.');
-          return;
-        }
-        setResult(msg.result ?? null);
-        setPatch(msg.patch ?? null);
-      };
-    }
-    return () => {
-      workerRef.current?.terminate();
-      workerRef.current = null;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e: MediaQueryListEvent) => {
+      if (!themeOverridden.current) setTheme(e.matches ? 'dark' : 'light');
     };
-  }, [showToast]);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  useEffect(
+    () => () => {
+      workerRef.current?.terminate();
+    },
+    [],
+  );
 
   useEffect(() => {
     setComputing(true);
     const id = ++seqRef.current;
     const timer = window.setTimeout(() => {
-      workerRef.current?.postMessage({
+      workerRef.current?.terminate();
+      workerRef.current = makeWorker();
+      workerRef.current.postMessage({
         id,
         oldText,
         newText,
         options,
+        oldName: fileNames.old ?? undefined,
+        newName: fileNames.new ?? undefined,
       });
     }, DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [oldText, newText, options]);
+  }, [oldText, newText, options, fileNames, makeWorker]);
+
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) =>
+      Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    const onDragEnter = (e: DragEvent) => {
+      if (hasFiles(e)) setGlobalDrag(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!e.relatedTarget) setGlobalDrag(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      setGlobalDrag(false);
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      if (file.size > MAX_FILE_BYTES) {
+        showToast(`"${file.name}" is larger than the 10 MB limit.`);
+        return;
+      }
+      file
+        .text()
+        .then((text) => {
+          const targetLeft = e.clientX < window.innerWidth / 2;
+          setFileNames((names) => ({
+            ...names,
+            [targetLeft ? 'old' : 'new']: file.name,
+          }));
+          if (targetLeft) setOldText(text);
+          else setNewText(text);
+        })
+        .catch(() => showToast(`Could not read "${file.name}".`));
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, [showToast]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -154,6 +255,8 @@ export default function App() {
     setOldText('');
     setNewText('');
     setOptions(DEFAULT_OPTIONS);
+    setFileNames({ old: null, new: null });
+    setRenderAll(false);
     save(storageKeys.oldText, '');
     save(storageKeys.newText, '');
     save(storageKeys.options, DEFAULT_OPTIONS);
@@ -167,6 +270,7 @@ export default function App() {
   const handleSwap = useCallback(() => {
     setOldText(newText);
     setNewText(oldText);
+    setFileNames((names) => ({ old: names.new, new: names.old }));
   }, [oldText, newText]);
 
   const handleCopyPatch = useCallback(async () => {
@@ -186,25 +290,58 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'diff.patch';
+    const base = (name: string | null) =>
+      name ? name.replace(/\.[^./\\]+$/, '') : 'diff';
+    a.download = `${base(fileNames.new)}.patch`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [patch]);
+  }, [patch, fileNames.new]);
 
   const hasInput = oldText !== '' || newText !== '';
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === '1') {
+        e.preventDefault();
+        setViewMode('side-by-side');
+      } else if (key === '2') {
+        e.preventDefault();
+        setViewMode('inline');
+      } else if (key === 's') {
+        e.preventDefault();
+        handleDownloadPatch();
+      } else if (key === 'e') {
+        e.preventDefault();
+        document
+          .querySelector<HTMLTextAreaElement>('.input-panel--left textarea')
+          ?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [setViewMode, handleDownloadPatch]);
+
   const identical =
     result?.stats != null &&
     result.stats.added + result.stats.removed + result.stats.changed === 0;
-  const visibleRows = useMemo(
-    () => (result ? applyContext(result.rows, options.context) : []),
-    [result, options.context],
-  );
+  const { rows: visibleRows, totalRows } = useMemo(() => {
+    const all = result ? applyContext(result.rows, options.context) : [];
+    if (renderAll || all.length <= RENDER_CAP) {
+      return { rows: all, totalRows: all.length };
+    }
+    return { rows: all.slice(0, RENDER_CAP), totalRows: all.length };
+  }, [result, options.context, renderAll]);
 
   return (
     <div className="app">
       <Header
         theme={theme}
-        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+        onToggleTheme={() => {
+          themeOverridden.current = true;
+          setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+        }}
         onNewDiff={handleNewDiff}
         busy={computing}
       />
@@ -217,6 +354,9 @@ export default function App() {
             value={oldText}
             onChange={setOldText}
             onError={showToast}
+            onFileInfo={(name) =>
+              setFileNames((names) => ({ ...names, old: name }))
+            }
           />
           <div className="panels__swap">
             <button
@@ -235,6 +375,9 @@ export default function App() {
             value={newText}
             onChange={setNewText}
             onError={showToast}
+            onFileInfo={(name) =>
+              setFileNames((names) => ({ ...names, new: name }))
+            }
           />
         </div>
 
@@ -279,6 +422,7 @@ export default function App() {
               <StatsBar
                 stats={result.stats}
                 identical={identical}
+                timeMs={result.timeMs}
                 onCopyPatch={handleCopyPatch}
                 onDownloadPatch={handleDownloadPatch}
                 patchReady={patch !== null}
@@ -290,11 +434,25 @@ export default function App() {
                 wrap={wrap}
                 lineNumbers={lineNumbers}
               />
+              {totalRows > RENDER_CAP && !renderAll && (
+                <div className="notice notice--muted">
+                  Showing the first {RENDER_CAP.toLocaleString()} of{' '}
+                  {totalRows.toLocaleString()} rows.
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => setRenderAll(true)}
+                  >
+                    Render all
+                  </button>
+                </div>
+              )}
             </>
           )}
         </section>
 
-        {computing && hasInput && result !== null && (
+        {computing && hasInput && (
           <div className="notice notice--muted">Computing differences…</div>
         )}
       </main>
@@ -305,6 +463,12 @@ export default function App() {
           no data is uploaded anywhere. Built with React, TypeScript and jsdiff.
         </p>
       </footer>
+
+      {globalDrag && (
+        <div className="drop-overlay" aria-hidden="true">
+          Drop to compare — left half fills Original, right half fills Changed
+        </div>
+      )}
 
       {toast && (
         <div className="toast" role="alert">
