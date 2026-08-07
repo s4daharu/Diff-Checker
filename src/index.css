@@ -362,6 +362,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-height: 28px;
   font-size: 13.5px;
   cursor: pointer;
   user-select: none;
@@ -829,13 +830,6 @@ body {
   .panels {
     grid-template-columns: 1fr;
     gap: 30px;
-  }
-
-  .panels__swap {
-    top: auto;
-    left: 50%;
-    bottom: -16px;
-    transform: translateX(-50%);
   }
 
   .optionsbar__group--end {
