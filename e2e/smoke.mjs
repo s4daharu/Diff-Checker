@@ -1,0 +1,197 @@
+import { spawn } from 'node:child_process';
+import { chromium } from 'playwright';
+
+const PORT = 4173;
+const results = [];
+const check = (name, cond, detail = '') => {
+  results.push({ name, ok: !!cond });
+  console.log(`${cond ? '  ok   ' : '  FAIL '}${name}${detail ? ' — ' + detail : ''}`);
+};
+
+const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], {
+  stdio: 'ignore',
+  detached: false,
+});
+
+const waitForServer = async (retries = 40) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(`http://localhost:${PORT}/`);
+      if (res.ok) return;
+    } catch {
+      // not up yet
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error('preview server did not start');
+};
+
+try {
+  await waitForServer();
+} catch (err) {
+  preview.kill();
+  throw err;
+}
+
+const browser = await chromium.launch();
+const page = await browser.newPage();
+const errors = [];
+page.on('pageerror', (e) => errors.push(String(e)));
+page.on('console', (m) => {
+  if (m.type() === 'error') errors.push(m.text());
+});
+
+await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
+
+check('no console/page errors on load', errors.length === 0, errors.join(' | '));
+
+const emptyVisible = await page.locator('.empty').isVisible();
+check('empty state visible initially', emptyVisible);
+
+await page.getByRole('button', { name: 'Try with sample text' }).click();
+await page.waitForSelector('.diff-view--side', { timeout: 5000 });
+
+const rows = await page
+  .locator('.diff-row--modified, .diff-row--added, .diff-row--deleted')
+  .count();
+check('diff rows render', rows > 5, `rows=${rows}`);
+
+const pillText = await page.locator('.pill').allTextContents();
+check('stats pills show', pillText.length === 4, pillText.join(', '));
+
+const hlCount = await page.locator('.hl--add, .hl--del').count();
+check('intra-line highlights render', hlCount > 0, `hl=${hlCount}`);
+
+// toggle inline view
+await page.getByRole('tab', { name: 'Inline' }).click();
+await page.waitForSelector('.diff-view--inline');
+const signCount = await page.locator('.sign--added, .sign--deleted').count();
+check('inline view shows signs', signCount > 0, `signs=${signCount}`);
+
+// context=0
+await page.getByLabel('Context lines').selectOption('0');
+await page.waitForTimeout(600);
+const gapCount = await page.locator('.diff-row--gap').count();
+check('context 0 produces gaps', gapCount >= 2, `gaps=${gapCount}`);
+
+// ignore case option
+await page.getByLabel('Context lines').selectOption('all');
+const ta = page.locator('.input-panel--left textarea');
+const ta2 = page.locator('.input-panel--right textarea');
+await ta.fill('HELLO WORLD\nsecond line\nthird line\n');
+await ta2.fill('hello world\nsecond line\nthird line\n');
+await page.waitForTimeout(800);
+let msgCount = await page.locator('.statsbar__message').count();
+check('case-differing texts show as different (no identical banner)', msgCount === 0, `count=${msgCount}`);
+
+// copy patch button enabled
+const copyBtn = page.locator('.statsbar__actions .btn').first();
+check('copy patch enabled', await copyBtn.isEnabled());
+
+// download patch
+const downloadPromise = page.waitForEvent('download');
+await page.locator('.statsbar__actions .btn').nth(1).click();
+const download = await downloadPromise;
+check('download works', download.suggestedFilename() === 'diff.patch', download.suggestedFilename());
+
+await page.getByLabel('Ignore case').check();
+await page.waitForTimeout(800);
+const msg = await page.locator('.statsbar__message').textContent();
+check('ignore case → identical', !!msg && msg.includes('No differences'), msg);
+
+// swap
+await page.getByLabel('Swap texts').click();
+const leftVal = await ta.inputValue();
+check('swap works', leftVal === 'hello world\nsecond line\nthird line\n', leftVal);
+
+// identical texts state
+await ta.fill('same\n');
+await ta2.fill('same\n');
+await page.waitForTimeout(800);
+const identical = await page.locator('.statsbar--identical').count();
+check('identical banner', identical === 1);
+
+// file upload via file chooser
+await ta.fill('file one\n');
+await ta2.fill('');
+const chooserPromise = page.waitForEvent('filechooser');
+await page.locator('.input-panel--right').getByRole('button', { name: 'Open file' }).click();
+const chooser = await chooserPromise;
+await chooser.setFiles({
+  name: 'test.txt',
+  mimeType: 'text/plain',
+  buffer: Buffer.from('file one\nsecond\n'),
+});
+await page.waitForTimeout(800);
+const rightVal = await ta2.inputValue();
+check('file upload reads text', rightVal === 'file one\nsecond\n', rightVal);
+
+// theme toggle
+const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
+await page.getByTitle(/light|dark mode/).click();
+const themeAfter = await page.evaluate(() => document.documentElement.dataset.theme);
+check('theme toggles', themeBefore !== themeAfter, `${themeBefore} → ${themeAfter}`);
+
+// large-file smoke test: 2000 lines with edits.
+// Values are set via evaluate: Playwright's CDP fill is slow for large
+// strings in this headless environment, independent of the app under test.
+let big = '';
+for (let i = 0; i < 2000; i++) big += `line number ${i} with some content\n`;
+const setValue = (locator, text) =>
+  locator.evaluate((el, value) => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      'value',
+    ).set;
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, text);
+const t0 = Date.now();
+await setValue(ta, big);
+await setValue(ta2, big.replace('line number 1000', 'line number CHANGED'));
+// view is currently Inline: a modified row renders as a '-'/'+' row pair
+await page.waitForSelector('.diff-row--added', { timeout: 10000 });
+const perf = Date.now() - t0;
+check('2000-line diff renders', true, `${perf}ms`);
+
+// back to side-by-side: modified rows render as single rows again
+await page.getByRole('tab', { name: 'Side by side' }).click();
+await page.waitForSelector('.diff-row--modified', { timeout: 5000 });
+check('modified row in side-by-side', (await page.locator('.diff-row--modified').count()) === 1);
+
+// wrap toggle: long line must wrap instead of horizontally scrolling
+const longLine = 'y'.repeat(2000);
+await setValue(ta, 'a\n' + longLine + '\nb\n');
+await setValue(ta2, 'a\n' + longLine + '\nc\n');
+await page.waitForTimeout(900);
+const overflowBefore = await page.evaluate(() => {
+  const s = document.querySelector('.diff-scroll');
+  return s.scrollWidth - s.clientWidth;
+});
+check('no wrap: horizontal overflow present', overflowBefore > 200, `overflow=${overflowBefore}px`);
+await page.getByLabel('Wrap lines').check();
+await page.waitForTimeout(900);
+const overflowAfter = await page.evaluate(() => {
+  const s = document.querySelector('.diff-scroll');
+  return s.scrollWidth - s.clientWidth;
+});
+check('wrap on: no horizontal overflow', overflowAfter < 100, `overflow=${overflowAfter}px`);
+await page.getByLabel('Wrap lines').uncheck();
+
+// new diff: clears panels but keeps theme preference
+const themeBeforeNew = await page.evaluate(() => document.documentElement.dataset.theme);
+await page.getByRole('button', { name: 'New diff' }).click();
+await page.waitForTimeout(400);
+const cleared = (await ta.inputValue()) === '' && (await ta2.inputValue()) === '';
+const themeAfterNew = await page.evaluate(() => document.documentElement.dataset.theme);
+check('new diff clears panels', cleared);
+check('new diff keeps theme', themeBeforeNew === themeAfterNew, `${themeBeforeNew} → ${themeAfterNew}`);
+
+check('no errors accumulated', errors.length === 0, errors.join(' | '));
+
+await browser.close();
+preview.kill();
+
+const fails = results.filter((r) => !r.ok).length;
+console.log(`\n${fails === 0 ? 'ALL BROWSER TESTS PASSED' : fails + ' BROWSER FAILURES'}`);
+process.exit(fails === 0 ? 0 : 1);
