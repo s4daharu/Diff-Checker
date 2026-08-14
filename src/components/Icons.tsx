@@ -96,6 +96,98 @@ export const ResetIcon = (p: IconProps) =>
     </>,
   );
 
+export const ChevronUpIcon = (p: IconProps) =>
+  base(p, <path d="M18 15l-6-6-6 6" />);
+
+export const ChevronDownIcon = (p: IconProps) =>
+  base(p, <path d="M6 9l6 6 6-6" />);
+
+export const SearchIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.35-4.35" />
+    </>,
+  );
+
+export const WandIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="m15 4 5 5" />
+      <path d="m18 1 5 5" />
+      <path d="M2 22l12-12" />
+      <path d="M9 3l1 2 2 1-2 1-1 2-1-2-2-1 2-1z" />
+    </>,
+  );
+
+export const KeyboardIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M6 12h.001M10 12h.001M14 12h.001M18 12h.001M7 16h10" />
+    </>,
+  );
+
+export const ShareIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="m8.59 13.51 6.83 3.98m-.01-10.98-6.82 3.98" />
+    </>,
+  );
+
+export const FileCodeIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+      <path d="m10 13-2 2 2 2m4-4 2 2-2 2" />
+    </>,
+  );
+
+export const PasteIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+      <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+    </>,
+  );
+
+export const ExpandUpIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M12 19V5m0 0-4 4m4-4 4 4" />
+      <path d="M5 3h14" />
+    </>,
+  );
+
+export const ExpandDownIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M12 5v14m0 0-4-4m4 4 4-4" />
+      <path d="M5 21h14" />
+    </>,
+  );
+
+export const ExpandAllIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M7 8l5-5 5 5" />
+      <path d="M7 16l5 5 5-5" />
+    </>,
+  );
+
 export const LogoIcon = ({ size = 24 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
     <rect x="2" y="4" width="12" height="24" rx="3" fill="#e5484d" />

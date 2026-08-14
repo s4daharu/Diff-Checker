@@ -27,6 +27,8 @@ export interface DiffRow {
   oldSpans?: Span[];
   newSpans?: Span[];
   skipped?: number;
+  gapStartRow?: number;
+  gapEndRow?: number;
 }
 
 export interface DiffStats {
@@ -44,6 +46,25 @@ export interface DiffResult {
   aborted: boolean;
   timeMs: number;
 }
+
+export interface SamplePreset {
+  id: string;
+  label: string;
+  category: string;
+  oldName: string;
+  newName: string;
+  oldText: string;
+  newText: string;
+}
+
+export type TextTransform =
+  | 'format-json'
+  | 'sort-lines'
+  | 'sort-lines-desc'
+  | 'trim-whitespace'
+  | 'remove-blank-lines'
+  | 'lowercase'
+  | 'uppercase';
 
 export const DEFAULT_OPTIONS: DiffOptions = {
   ignoreCase: false,

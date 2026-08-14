@@ -1,13 +1,44 @@
-import { LogoIcon, MoonIcon, SunIcon } from './Icons';
+import { useEffect, useRef, useState } from 'react';
+import {
+  KeyboardIcon,
+  LogoIcon,
+  MoonIcon,
+  SunIcon,
+} from './Icons';
+import { SAMPLE_PRESETS } from '../lib/sample';
+import type { SamplePreset } from '../lib/types';
 
 interface HeaderProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onNewDiff: () => void;
   busy: boolean;
+  onSelectPreset?: (preset: SamplePreset) => void;
+  onOpenShortcuts?: () => void;
 }
 
-export function Header({ theme, onToggleTheme, onNewDiff, busy }: HeaderProps) {
+export function Header({
+  theme,
+  onToggleTheme,
+  onNewDiff,
+  busy,
+  onSelectPreset,
+  onOpenShortcuts,
+}: HeaderProps) {
+  const [samplesOpen, setSamplesOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!samplesOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setSamplesOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [samplesOpen]);
+
   return (
     <header className="header">
       <div className="header__brand">
@@ -19,8 +50,60 @@ export function Header({ theme, onToggleTheme, onNewDiff, busy }: HeaderProps) {
           </span>
         </div>
       </div>
+
       <div className="header__actions">
         {busy && <span className="header__busy">Comparing…</span>}
+
+        {onSelectPreset && (
+          <div className="dropdown-wrapper" ref={dropdownRef}>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => setSamplesOpen((o) => !o)}
+              title="Load example text datasets"
+              aria-label="Samples"
+              aria-expanded={samplesOpen}
+            >
+              <span className="btn__label">Samples</span>
+              <span style={{ fontSize: 10, marginLeft: 2 }}>▼</span>
+            </button>
+
+            {samplesOpen && (
+              <div className="dropdown-menu">
+                <div className="dropdown-header">Choose sample:</div>
+                {SAMPLE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className="dropdown-item dropdown-item--stack"
+                    onClick={() => {
+                      onSelectPreset(preset);
+                      setSamplesOpen(false);
+                    }}
+                  >
+                    <span className="dropdown-item__title">{preset.label}</span>
+                    <span className="dropdown-item__desc">
+                      {preset.category} · {preset.oldName}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {onOpenShortcuts && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon"
+            onClick={onOpenShortcuts}
+            title="Keyboard shortcuts (Press ?)"
+            aria-label="Keyboard shortcuts"
+          >
+            <KeyboardIcon size={16} />
+          </button>
+        )}
+
         <button
           type="button"
           className="btn btn--ghost"
@@ -30,6 +113,7 @@ export function Header({ theme, onToggleTheme, onNewDiff, busy }: HeaderProps) {
           {theme === 'dark' ? <SunIcon size={17} /> : <MoonIcon size={17} />}
           <span className="btn__label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
         </button>
+
         <button type="button" className="btn btn--primary" onClick={onNewDiff}>
           New diff
         </button>

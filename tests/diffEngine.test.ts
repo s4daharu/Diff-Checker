@@ -2,7 +2,12 @@ import {
   computeDiff,
   applyContext,
   buildUnifiedPatch,
+  buildMarkdownDiff,
+  buildHtmlDiffReport,
   countLines,
+  countWords,
+  formatJson,
+  applyTextTransform,
 } from '../src/lib/diffEngine';
 import type { DiffOptions } from '../src/lib/types';
 import { applyPatch } from 'diff';
@@ -143,13 +148,69 @@ console.log('--- patch with context=1 ---');
   check('second hunk -6,3 +6,3', patch.includes('@@ -6,3 +6,3 @@'), patch);
 }
 
-console.log('--- countLines ---');
+console.log('--- countLines & countWords ---');
 {
   check('countLines empty', countLines('') === 0);
   check('countLines a\\n', countLines('a\n') === 1);
   check('countLines a\\n\\n', countLines('a\n\n') === 2);
   check('countLines no trailing', countLines('a\nb') === 2);
   check('countLines crlf', countLines('a\r\nb\r\n') === 2);
+  check('countWords empty', countWords('') === 0);
+  check('countWords text', countWords('hello world foo bar') === 4);
+  check('countWords with whitespace', countWords('   multi \n line \t string   ') === 3);
+}
+
+console.log('--- formatJson and applyTextTransform ---');
+{
+  const jsonRaw = '{"b":2,"a":1}';
+  const jsonFmt = formatJson(jsonRaw);
+  check('formatJson success', jsonFmt.success && jsonFmt.result.includes('\n  "b": 2'));
+  const jsonInvalid = formatJson('{not json}');
+  check('formatJson error', !jsonInvalid.success && jsonInvalid.error !== undefined);
+
+  const sortRes = applyTextTransform('cherry\napple\nbanana\n', 'sort-lines');
+  check('sort-lines', sortRes.result === 'apple\nbanana\ncherry\n');
+
+  const sortDescRes = applyTextTransform('apple\ncherry\nbanana\n', 'sort-lines-desc');
+  check('sort-lines-desc', sortDescRes.result === 'cherry\nbanana\napple\n');
+
+  const trimRes = applyTextTransform('  foo  \n  bar   \n', 'trim-whitespace');
+  check('trim-whitespace', trimRes.result === 'foo\nbar\n');
+
+  const blankRes = applyTextTransform('foo\n\n   \nbar\n', 'remove-blank-lines');
+  check('remove-blank-lines', blankRes.result === 'foo\nbar\n');
+}
+
+console.log('--- buildMarkdownDiff and buildHtmlDiffReport ---');
+{
+  const r = computeDiff('hello\nworld\n', 'hello\nWORLD\n', base);
+  const md = buildMarkdownDiff(r.rows, 'all', 'a.txt', 'b.txt');
+  check('markdown diff starts with ```diff', md.startsWith('```diff\n'));
+  check('markdown diff ends with ```\\n', md.endsWith('```\n'));
+  check('markdown diff has +WORLD', md.includes('+WORLD'));
+
+  const html = buildHtmlDiffReport({
+    rows: r.rows,
+    stats: r.stats,
+    oldName: 'a.txt',
+    newName: 'b.txt',
+  });
+  check('html report has doctype', html.includes('<!DOCTYPE html>'));
+  check('html report has diff table', html.includes('class="diff-table"'));
+}
+
+console.log('--- applyContext with expanded gap indices ---');
+{
+  const r = computeDiff('1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n', '1\n2\nX\n4\n5\n6\nY\n8\n9\n10\n', base);
+  const initialTrimmed = applyContext(r.rows, 1);
+  check('initial has gap', initialTrimmed.some((x) => x.kind === 'gap'));
+  const gap = initialTrimmed.find((x) => x.kind === 'gap');
+  check('gap has gapStartRow & gapEndRow', gap?.gapStartRow === 4 && gap?.gapEndRow === 4);
+
+  // Expand row 4 (the skipped line)
+  const expanded = applyContext(r.rows, 1, new Set([4]));
+  check('expanded has no gap', !expanded.some((x) => x.kind === 'gap'));
+  check('expanded length = 7', expanded.length === 7);
 }
 
 console.log(`\n${failures === 0 ? 'ALL PASSED' : failures + ' FAILURES'}`);

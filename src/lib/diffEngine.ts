@@ -5,6 +5,7 @@ import type {
   DiffRow,
   DiffStats,
   Span,
+  TextTransform,
 } from './types';
 
 const MAX_CHAR_DIFF_LENGTH = 4000;
@@ -205,23 +206,87 @@ function buildRows(parts: Change[], options: DiffOptions): DiffRow[] {
   return rows;
 }
 
+export function countWords(value: string): number {
+  if (!value.trim()) return 0;
+  const matches = value.match(/\S+/g);
+  return matches ? matches.length : 0;
+}
+
+export function formatJson(value: string): { success: boolean; result: string; error?: string } {
+  try {
+    const parsed = JSON.parse(value);
+    return { success: true, result: JSON.stringify(parsed, null, 2) };
+  } catch (err) {
+    return {
+      success: false,
+      result: value,
+      error: err instanceof Error ? err.message : 'Invalid JSON format',
+    };
+  }
+}
+
+export function applyTextTransform(
+  text: string,
+  transform: TextTransform,
+): { success: boolean; result: string; error?: string } {
+  switch (transform) {
+    case 'format-json':
+      return formatJson(text);
+    case 'sort-lines': {
+      const lines = splitLines(text);
+      lines.sort((a, b) => a.localeCompare(b));
+      return { success: true, result: lines.join('\n') + (text.endsWith('\n') ? '\n' : '') };
+    }
+    case 'sort-lines-desc': {
+      const lines = splitLines(text);
+      lines.sort((a, b) => b.localeCompare(a));
+      return { success: true, result: lines.join('\n') + (text.endsWith('\n') ? '\n' : '') };
+    }
+    case 'trim-whitespace': {
+      const lines = splitLines(text).map((l) => l.trim());
+      return { success: true, result: lines.join('\n') + (text.endsWith('\n') ? '\n' : '') };
+    }
+    case 'remove-blank-lines': {
+      const lines = splitLines(text).filter((l) => l.trim().length > 0);
+      return { success: true, result: lines.join('\n') + (lines.length > 0 && text.endsWith('\n') ? '\n' : '') };
+    }
+    case 'lowercase':
+      return { success: true, result: text.toLowerCase() };
+    case 'uppercase':
+      return { success: true, result: text.toUpperCase() };
+    default:
+      return { success: true, result: text };
+  }
+}
+
 export function applyContext(
   rows: DiffRow[],
   context: number | 'all',
+  expandedIndices?: Set<number> | null,
 ): DiffRow[] {
-  if (context === 'all') return rows;
+  if (context === 'all' && (!expandedIndices || expandedIndices.size === 0)) return rows;
 
   const changedIndices: number[] = [];
   for (let i = 0; i < rows.length; i++) {
     if (rows[i].kind !== 'equal') changedIndices.push(i);
   }
-  if (changedIndices.length === 0) return rows;
+  if (changedIndices.length === 0 && (!expandedIndices || expandedIndices.size === 0)) return rows;
 
   const keep = new Set<number>();
-  for (const idx of changedIndices) {
-    const from = Math.max(0, idx - context);
-    const to = Math.min(rows.length - 1, idx + context);
-    for (let k = from; k <= to; k++) keep.add(k);
+  if (context === 'all') {
+    for (let i = 0; i < rows.length; i++) keep.add(i);
+  } else {
+    for (const idx of changedIndices) {
+      const from = Math.max(0, idx - context);
+      const to = Math.min(rows.length - 1, idx + context);
+      for (let k = from; k <= to; k++) keep.add(k);
+    }
+  }
+
+  if (expandedIndices) {
+    for (const idx of expandedIndices) {
+      if (idx >= 0 && idx < rows.length) keep.add(idx);
+    }
   }
 
   const out: DiffRow[] = [];
@@ -232,6 +297,8 @@ export function applyContext(
         out.push(rows[k]);
       } else {
         const skipped = k - lastKept - 1;
+        const gapStartRow = lastKept === -2 ? 0 : lastKept + 1;
+        const gapEndRow = k - 1;
         out.push({
           kind: 'gap',
           oldLine: null,
@@ -239,6 +306,8 @@ export function applyContext(
           oldNum: null,
           newNum: null,
           skipped,
+          gapStartRow,
+          gapEndRow,
         });
         out.push(rows[k]);
       }
@@ -387,4 +456,184 @@ export function buildUnifiedPatch(
   flushHunk();
 
   return lines.join('\n') + '\n';
+}
+
+export function buildMarkdownDiff(
+  rows: DiffRow[],
+  context: number | 'all',
+  oldName = 'original.txt',
+  newName = 'changed.txt',
+): string {
+  const patch = buildUnifiedPatch(rows, context, oldName, newName);
+  return '```diff\n' + patch.trimEnd() + '\n```\n';
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+export function buildHtmlDiffReport({
+  rows,
+  stats,
+  oldName = 'original.txt',
+  newName = 'changed.txt',
+}: {
+  rows: DiffRow[];
+  stats: DiffStats | null;
+  oldName?: string;
+  newName?: string;
+}): string {
+  const rowsHtml = rows
+    .map((row) => {
+      if (row.kind === 'gap') {
+        return `<tr class="gap"><td colspan="4">… ${row.skipped ?? ''} lines hidden …</td></tr>`;
+      }
+      const oldNum = row.oldNum ?? '';
+      const newNum = row.newNum ?? '';
+      const oldContent = row.oldSpans
+        ? row.oldSpans
+            .map((s) => `<span class="${s.removed ? 'del-hl' : ''}">${escapeHtml(s.text)}</span>`)
+            .join('')
+        : escapeHtml(row.oldLine ?? '');
+      const newContent = row.newSpans
+        ? row.newSpans
+            .map((s) => `<span class="${s.added ? 'add-hl' : ''}">${escapeHtml(s.text)}</span>`)
+            .join('')
+        : escapeHtml(row.newLine ?? '');
+
+      return `<tr class="row-${row.kind}">
+        <td class="ln">${oldNum}</td>
+        <td class="code code-old">${oldContent}</td>
+        <td class="ln">${newNum}</td>
+        <td class="code code-new">${newContent}</td>
+      </tr>`;
+    })
+    .join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diff Report: ${escapeHtml(oldName)} vs ${escapeHtml(newName)}</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #1b2433;
+    --border: #e1e6ee;
+    --ln-bg: #f8fafc;
+    --ln-color: #667085;
+    --add-bg: #e7f8ee;
+    --add-hl: #c7f2d8;
+    --del-bg: #fdecec;
+    --del-hl: #f8cbcb;
+    --mod-bg: #fdf6d9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --text: #e6edf3;
+      --border: #2d3542;
+      --ln-bg: #161b22;
+      --ln-color: #8b98a9;
+      --add-bg: #12291c;
+      --add-hl: #1d4430;
+      --del-bg: #2a1719;
+      --del-hl: #4a2528;
+      --mod-bg: #2b2410;
+    }
+  }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 24px;
+  }
+  .header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+  }
+  .title { margin: 0 0 8px; font-size: 20px; }
+  .stats { display: flex; gap: 12px; font-size: 14px; margin-top: 8px; }
+  .pill { padding: 3px 8px; border-radius: 999px; font-weight: 600; }
+  .pill-add { background: var(--add-bg); color: #1d7a45; }
+  .pill-del { background: var(--del-bg); color: #c0392b; }
+  .pill-mod { background: var(--mod-bg); color: #8a6d1a; }
+  .diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .diff-table th {
+    background: var(--ln-bg);
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+  }
+  .diff-table td {
+    padding: 2px 10px;
+    vertical-align: top;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  }
+  .ln {
+    width: 50px;
+    text-align: right;
+    background: var(--ln-bg);
+    color: var(--ln-color);
+    user-select: none;
+    border-right: 1px solid var(--border);
+  }
+  .row-added { background: var(--add-bg); }
+  .row-deleted { background: var(--del-bg); }
+  .row-modified { background: var(--mod-bg); }
+  .gap td {
+    background: var(--ln-bg);
+    text-align: center;
+    color: var(--ln-color);
+    padding: 6px;
+    font-style: italic;
+  }
+  .add-hl { background: var(--add-hl); font-weight: bold; border-radius: 2px; }
+  .del-hl { background: var(--del-hl); text-decoration: line-through; border-radius: 2px; }
+  @media print {
+    body { padding: 0; }
+  }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1 class="title">Diff: ${escapeHtml(oldName)} ➔ ${escapeHtml(newName)}</h1>
+    <div class="stats">
+      ${stats ? `
+        <span class="pill pill-add">+${stats.added} added</span>
+        <span class="pill pill-del">-${stats.removed} removed</span>
+        <span class="pill pill-mod">~${stats.changed} changed</span>
+        <span>${stats.unchanged} unchanged</span>
+      ` : ''}
+    </div>
+  </div>
+  <table class="diff-table">
+    <thead>
+      <tr>
+        <th colspan="2">${escapeHtml(oldName)}</th>
+        <th colspan="2">${escapeHtml(newName)}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+    </tbody>
+  </table>
+</body>
+</html>`;
 }

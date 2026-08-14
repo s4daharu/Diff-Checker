@@ -4,11 +4,13 @@ import { InputPanel } from './components/InputPanel';
 import { OptionsBar } from './components/OptionsBar';
 import { StatsBar } from './components/StatsBar';
 import { DiffView } from './components/DiffView';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { LogoIcon, SwapIcon } from './components/Icons';
 import {
   DEFAULT_OPTIONS,
   type DiffOptions,
   type DiffResult,
+  type SamplePreset,
   type ViewMode,
 } from './lib/types';
 import {
@@ -18,7 +20,11 @@ import {
   storageKeys,
 } from './lib/storage';
 import { SAMPLE_CHANGED, SAMPLE_ORIGINAL } from './lib/sample';
-import { applyContext } from './lib/diffEngine';
+import {
+  applyContext,
+  buildHtmlDiffReport,
+  buildMarkdownDiff,
+} from './lib/diffEngine';
 import { MAX_FILE_BYTES } from './components/InputPanel';
 
 type Theme = 'light' | 'dark';
@@ -107,9 +113,16 @@ export default function App() {
   const [computing, setComputing] = useState(false);
   const [patch, setPatch] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [renderAll, setRenderAll] = useState(false);
   const [globalDrag, setGlobalDrag] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandedIndices, setExpandedIndices] = useState<Set<number>>(() => new Set());
+  const [currentChangeIndex, setCurrentChangeIndex] = useState<number | null>(null);
+  const [activeChangeRowIndex, setActiveChangeRowIndex] = useState<number | null>(null);
   const [fileNames, setFileNames] = useState<{
     old: string | null;
     new: string | null;
@@ -197,6 +210,13 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [oldText, newText, options, fileNames, makeWorker]);
 
+  // Reset expanded gaps when inputs or context settings change
+  useEffect(() => {
+    setExpandedIndices(new Set());
+    setCurrentChangeIndex(null);
+    setActiveChangeRowIndex(null);
+  }, [oldText, newText, options.context]);
+
   useEffect(() => {
     const hasFiles = (e: DragEvent) =>
       Array.from(e.dataTransfer?.types ?? []).includes('Files');
@@ -257,6 +277,11 @@ export default function App() {
     setOptions(DEFAULT_OPTIONS);
     setFileNames({ old: null, new: null });
     setRenderAll(false);
+    setExpandedIndices(new Set());
+    setCurrentChangeIndex(null);
+    setActiveChangeRowIndex(null);
+    setSearchQuery('');
+    setSearchOpen(false);
     save(storageKeys.oldText, '');
     save(storageKeys.newText, '');
     save(storageKeys.options, DEFAULT_OPTIONS);
@@ -265,12 +290,22 @@ export default function App() {
   const handleLoadSample = useCallback(() => {
     setOldText(SAMPLE_ORIGINAL);
     setNewText(SAMPLE_CHANGED);
+    setFileNames({ old: null, new: null });
+    setExpandedIndices(new Set());
+  }, []);
+
+  const handleSelectPreset = useCallback((preset: SamplePreset) => {
+    setOldText(preset.oldText);
+    setNewText(preset.newText);
+    setFileNames({ old: preset.oldName, new: preset.newName });
+    setExpandedIndices(new Set());
   }, []);
 
   const handleSwap = useCallback(() => {
     setOldText(newText);
     setNewText(oldText);
     setFileNames((names) => ({ old: names.new, new: names.old }));
+    setExpandedIndices(new Set());
   }, [oldText, newText]);
 
   const handleCopyPatch = useCallback(async () => {
@@ -283,6 +318,24 @@ export default function App() {
       showToast('Could not access the clipboard.');
     }
   }, [patch, showToast]);
+
+  const handleCopyMarkdown = useCallback(async () => {
+    if (!result || result.rows.length === 0) return;
+    try {
+      const md = buildMarkdownDiff(
+        result.rows,
+        options.context,
+        fileNames.old ?? 'original.txt',
+        fileNames.new ?? 'changed.txt',
+      );
+      await navigator.clipboard.writeText(md);
+      setCopiedMarkdown(true);
+      showToast('Copied Markdown diff to clipboard');
+      window.setTimeout(() => setCopiedMarkdown(false), 2000);
+    } catch {
+      showToast('Could not access the clipboard.');
+    }
+  }, [result, options.context, fileNames, showToast]);
 
   const handleDownloadPatch = useCallback(() => {
     if (patch === null) return;
@@ -297,12 +350,124 @@ export default function App() {
     URL.revokeObjectURL(url);
   }, [patch, fileNames.new]);
 
+  const handleExportHtml = useCallback(() => {
+    if (!result || result.rows.length === 0) return;
+    const html = buildHtmlDiffReport({
+      rows: result ? applyContext(result.rows, options.context, expandedIndices) : [],
+      stats: result.stats,
+      oldName: fileNames.old ?? 'original.txt',
+      newName: fileNames.new ?? 'changed.txt',
+    });
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const base = (name: string | null) =>
+      name ? name.replace(/\.[^./\\]+$/, '') : 'diff';
+    a.download = `${base(fileNames.new)}-report.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [result, options.context, expandedIndices, fileNames]);
+
+  const handleExpandGap = useCallback(
+    (startRow: number, endRow: number) => {
+      setExpandedIndices((prev) => {
+        const next = new Set(prev);
+        for (let k = startRow; k <= endRow; k++) {
+          next.add(k);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
   const hasInput = oldText !== '' || newText !== '';
+
+  const identical =
+    result?.stats != null &&
+    result.stats.added + result.stats.removed + result.stats.changed === 0;
+
+  const { rows: visibleRows, totalRows } = useMemo(() => {
+    const all = result
+      ? applyContext(result.rows, options.context, expandedIndices)
+      : [];
+    if (renderAll || all.length <= RENDER_CAP) {
+      return { rows: all, totalRows: all.length };
+    }
+    return { rows: all.slice(0, RENDER_CAP), totalRows: all.length };
+  }, [result, options.context, expandedIndices, renderAll]);
+
+  // List of row indices in visibleRows that represent actual differences
+  const changeRowIndices = useMemo(() => {
+    const list: number[] = [];
+    visibleRows.forEach((r, idx) => {
+      if (r.kind !== 'equal' && r.kind !== 'gap') {
+        list.push(idx);
+      }
+    });
+    return list;
+  }, [visibleRows]);
+
+  const handleNextChange = useCallback(() => {
+    if (changeRowIndices.length === 0) return;
+    const nextIdx =
+      currentChangeIndex === null
+        ? 0
+        : (currentChangeIndex + 1) % changeRowIndices.length;
+    setCurrentChangeIndex(nextIdx);
+    setActiveChangeRowIndex(changeRowIndices[nextIdx]);
+  }, [changeRowIndices, currentChangeIndex]);
+
+  const handlePrevChange = useCallback(() => {
+    if (changeRowIndices.length === 0) return;
+    const prevIdx =
+      currentChangeIndex === null
+        ? changeRowIndices.length - 1
+        : (currentChangeIndex - 1 + changeRowIndices.length) %
+          changeRowIndices.length;
+    setCurrentChangeIndex(prevIdx);
+    setActiveChangeRowIndex(changeRowIndices[prevIdx]);
+  }, [changeRowIndices, currentChangeIndex]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is currently typing in an input or textarea
+      const target = e.target as HTMLElement;
+      const inInput =
+        target &&
+        (target.tagName === 'TEXTAREA' ||
+          (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text'));
+
+      if (e.key === '?' && !inInput && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        setShortcutsOpen((o) => !o);
+        return;
+      }
+
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.key.toLowerCase() === 'n' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          handleNextChange();
+          return;
+        }
+        if (e.key.toLowerCase() === 'p' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          handlePrevChange();
+          return;
+        }
+      }
+
+      if (e.key === 'F7') {
+        e.preventDefault();
+        if (e.shiftKey) handlePrevChange();
+        else handleNextChange();
+        return;
+      }
+
       if (!(e.ctrlKey || e.metaKey)) return;
       const key = e.key.toLowerCase();
+
       if (key === '1') {
         e.preventDefault();
         setViewMode('side-by-side');
@@ -312,6 +477,9 @@ export default function App() {
       } else if (key === 's') {
         e.preventDefault();
         handleDownloadPatch();
+      } else if (key === 'f') {
+        e.preventDefault();
+        setSearchOpen((o) => !o);
       } else if (key === 'e') {
         e.preventDefault();
         document
@@ -321,18 +489,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [setViewMode, handleDownloadPatch]);
-
-  const identical =
-    result?.stats != null &&
-    result.stats.added + result.stats.removed + result.stats.changed === 0;
-  const { rows: visibleRows, totalRows } = useMemo(() => {
-    const all = result ? applyContext(result.rows, options.context) : [];
-    if (renderAll || all.length <= RENDER_CAP) {
-      return { rows: all, totalRows: all.length };
-    }
-    return { rows: all.slice(0, RENDER_CAP), totalRows: all.length };
-  }, [result, options.context, renderAll]);
+  }, [setViewMode, handleDownloadPatch, handleNextChange, handlePrevChange]);
 
   return (
     <div className="app">
@@ -344,6 +501,8 @@ export default function App() {
         }}
         onNewDiff={handleNewDiff}
         busy={computing}
+        onSelectPreset={handleSelectPreset}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
       />
 
       <main className="main">
@@ -354,6 +513,7 @@ export default function App() {
             value={oldText}
             onChange={setOldText}
             onError={showToast}
+            fileName={fileNames.old}
             onFileInfo={(name) =>
               setFileNames((names) => ({ ...names, old: name }))
             }
@@ -375,6 +535,7 @@ export default function App() {
             value={newText}
             onChange={setNewText}
             onError={showToast}
+            fileName={fileNames.new}
             onFileInfo={(name) =>
               setFileNames((names) => ({ ...names, new: name }))
             }
@@ -401,9 +562,14 @@ export default function App() {
               <h2>Compare two texts</h2>
               <p>
                 Paste text or open files in the two panels above. Everything is
-                computed locally — your text never leaves this device.
+                computed locally in real-time — your text never leaves this
+                device.
               </p>
-              <button type="button" className="btn btn--primary" onClick={handleLoadSample}>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={handleLoadSample}
+              >
                 Try with sample text
               </button>
             </div>
@@ -423,16 +589,31 @@ export default function App() {
                 stats={result.stats}
                 identical={identical}
                 timeMs={result.timeMs}
+                totalChanges={changeRowIndices.length}
+                currentChangeIndex={currentChangeIndex}
+                onNextChange={handleNextChange}
+                onPrevChange={handlePrevChange}
                 onCopyPatch={handleCopyPatch}
                 onDownloadPatch={handleDownloadPatch}
+                onCopyMarkdown={handleCopyMarkdown}
+                onExportHtml={handleExportHtml}
                 patchReady={patch !== null}
                 copied={copied}
+                copiedMarkdown={copiedMarkdown}
+                searchOpen={searchOpen}
+                onToggleSearch={() => setSearchOpen((o) => !o)}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
               />
               <DiffView
                 rows={visibleRows}
                 viewMode={viewMode}
                 wrap={wrap}
                 lineNumbers={lineNumbers}
+                searchQuery={searchQuery}
+                activeChangeRowIndex={activeChangeRowIndex}
+                onExpandGap={handleExpandGap}
+                onCopyNotice={showToast}
               />
               {totalRows > RENDER_CAP && !renderAll && (
                 <div className="notice notice--muted">
@@ -483,6 +664,11 @@ export default function App() {
           </button>
         </div>
       )}
+
+      <KeyboardShortcutsModal
+        isOpen={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+      />
     </div>
   );
 }

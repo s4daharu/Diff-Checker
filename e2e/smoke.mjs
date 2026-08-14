@@ -257,6 +257,70 @@ const dl2Path = await dl2.path();
 const patchText = readFileSync(dl2Path, 'utf8');
 check('patch header uses uploaded name', patchText.includes('--- orig.txt'), patchText.split('\n')[0]);
 
+// interactive gap expansion
+await page.getByRole('button', { name: 'New diff' }).click();
+await page.getByRole('button', { name: 'Try with sample text' }).click();
+await page.waitForSelector('.diff-view--side', { timeout: 5000 });
+await page.getByLabel('Context lines').selectOption('0');
+await page.waitForTimeout(600);
+const gapBtnsBefore = await page.locator('.gap-btn').count();
+check('gap buttons present with context 0', gapBtnsBefore > 0, `gapBtns=${gapBtnsBefore}`);
+const initialRowsCount = await page.locator('.diff-row').count();
+await page.locator('.gap-btn--all').first().evaluate((el) => el.click());
+await page.waitForTimeout(600);
+const afterExpandRowsCount = await page.locator('.diff-row').count();
+check('expanding gap adds visible rows', afterExpandRowsCount > initialRowsCount, `${initialRowsCount} → ${afterExpandRowsCount}`);
+
+// diff navigation
+await page.getByLabel('Context lines').selectOption('all');
+await page.waitForTimeout(600);
+const navLabel = await page.locator('.diff-nav-label').textContent();
+check('diff nav displays change count', !!navLabel && navLabel.includes('change'), navLabel);
+await page.getByTitle('Next difference (Alt+N or Alt+Down)').click();
+await page.waitForTimeout(300);
+const navLabelAfter = await page.locator('.diff-nav-label').textContent();
+check('nav next updates change index', !!navLabelAfter && navLabelAfter.includes('1 of'), navLabelAfter);
+const activeRow = await page.locator('.diff-row--active').count();
+check('active change row highlighted', activeRow === 1);
+
+// diff search
+await page.getByRole('button', { name: 'Find' }).click();
+await page.waitForSelector('.diff-search-input');
+await page.locator('.diff-search-input').fill('greet');
+await page.waitForTimeout(300);
+const matchesCount = await page.locator('.search-match').count();
+check('search matches highlighted', matchesCount > 0, `matches=${matchesCount}`);
+await page.locator('.diff-search-clear').click();
+await page.getByRole('button', { name: 'Close' }).click();
+
+// preset samples dropdown
+await page.getByRole('button', { name: 'Samples' }).click();
+await page.waitForSelector('.dropdown-menu');
+await page.getByRole('button', { name: /API Config/ }).click();
+await page.waitForTimeout(600);
+const jsonVal = await page.locator('.input-panel--left textarea').inputValue();
+check('preset loaded JSON text', jsonVal.includes('CloudMetrics'), jsonVal.slice(0, 40));
+
+// text tools transform
+const testJson = '{"z": 100, "a": 200}';
+await page.locator('.input-panel--left textarea').fill(testJson);
+await page.locator('.input-panel--left').getByTitle(/Text tools/).click();
+await page.waitForSelector('.dropdown-item >> text=Format / Prettify JSON');
+await page.getByRole('button', { name: 'Format / Prettify JSON' }).click();
+await page.waitForTimeout(300);
+const formattedVal = await page.locator('.input-panel--left textarea').inputValue();
+check('text tool formatted JSON', formattedVal.includes('\n  "z": 100'), formattedVal);
+
+// keyboard shortcuts modal
+await page.getByTitle(/Keyboard shortcuts/).click();
+await page.waitForSelector('.modal-card');
+const modalVisible = await page.locator('.modal-card').isVisible();
+check('shortcuts modal opens', modalVisible);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+const modalClosed = !(await page.locator('.modal-card').isVisible());
+check('shortcuts modal closes on Escape', modalClosed);
+
 check('no errors accumulated', errors.length === 0, errors.join(' | '));
 
 await browser.close();
