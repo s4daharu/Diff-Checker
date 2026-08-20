@@ -190,7 +190,9 @@ export const ExpandAllIcon = (p: IconProps) =>
 
 export const LogoIcon = ({ size = 24 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-    <rect x="2" y="4" width="12" height="24" rx="3" fill="#e5484d" />
-    <rect x="18" y="4" width="12" height="24" rx="3" fill="#30a46c" />
+    <rect x="2" y="4" width="12" height="24" rx="3" fill="var(--del-text, #e5484d)" opacity="0.95" />
+    <rect x="18" y="4" width="12" height="24" rx="3" fill="var(--add-text, #30a46c)" opacity="0.95" />
+    <rect x="2" y="4" width="12" height="24" rx="3" fill="none" stroke="color-mix(in srgb, var(--border-strong, #cbd4e0) 60%, transparent)" strokeWidth="0.8" />
+    <rect x="18" y="4" width="12" height="24" rx="3" fill="none" stroke="color-mix(in srgb, var(--border-strong, #cbd4e0) 60%, transparent)" strokeWidth="0.8" />
   </svg>
 );

@@ -51,8 +51,15 @@ export function InputPanel({
         setToolsOpen(false);
       }
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setToolsOpen(false);
+    };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [toolsOpen]);
 
   const handleFile = async (file: File | undefined | null) => {
@@ -193,6 +200,7 @@ export function InputPanel({
                     title="Text tools (Format JSON, Sort, Clean)"
                     aria-label="Text tools"
                     aria-expanded={toolsOpen}
+                    aria-haspopup="menu"
                   >
                     <WandIcon size={14} />
                   </button>

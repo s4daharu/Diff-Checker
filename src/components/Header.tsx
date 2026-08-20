@@ -35,8 +35,15 @@ export function Header({
         setSamplesOpen(false);
       }
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSamplesOpen(false);
+    };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [samplesOpen]);
 
   return (
@@ -52,7 +59,11 @@ export function Header({
       </div>
 
       <div className="header__actions">
-        {busy && <span className="header__busy">Comparing…</span>}
+        {busy && (
+          <span className="header__busy" role="status" aria-live="polite">
+            Comparing…
+          </span>
+        )}
 
         {onSelectPreset && (
           <div className="dropdown-wrapper" ref={dropdownRef}>
@@ -63,6 +74,7 @@ export function Header({
               title="Load example text datasets"
               aria-label="Samples"
               aria-expanded={samplesOpen}
+              aria-haspopup="menu"
             >
               <span className="btn__label">Samples</span>
               <span style={{ fontSize: 10, marginLeft: 2 }}>▼</span>

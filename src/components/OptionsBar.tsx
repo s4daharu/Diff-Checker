@@ -9,22 +9,26 @@ interface OptionsBarProps {
   onWrapChange: (wrap: boolean) => void;
   lineNumbers: boolean;
   onLineNumbersChange: (show: boolean) => void;
+  disabled?: boolean;
 }
 
 function Checkbox({
   label,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <label className="checkbox">
+    <label className={`checkbox ${disabled ? 'checkbox--disabled' : ''}`}>
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span>{label}</span>
@@ -37,16 +41,19 @@ function Select({
   onChange,
   options,
   ariaLabel,
+  disabled,
 }: {
   value: string;
   onChange: (value: string) => void;
   options: { value: string; label: string }[];
   ariaLabel: string;
+  disabled?: boolean;
 }) {
   return (
     <select
       className="select"
       value={value}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       aria-label={ariaLabel}
     >
@@ -68,18 +75,21 @@ export function OptionsBar({
   onWrapChange,
   lineNumbers,
   onLineNumbersChange,
+  disabled = false,
 }: OptionsBarProps) {
   return (
-    <div className="optionsbar">
+    <div className={`optionsbar ${disabled ? 'optionsbar--disabled' : ''}`} aria-disabled={disabled}>
       <div className="optionsbar__group">
         <Checkbox
           label="Ignore case"
           checked={options.ignoreCase}
+          disabled={disabled}
           onChange={(ignoreCase) => onOptionsChange({ ...options, ignoreCase })}
         />
         <Checkbox
           label="Ignore whitespace"
           checked={options.ignoreWhitespace}
+          disabled={disabled}
           onChange={(ignoreWhitespace) =>
             onOptionsChange({ ...options, ignoreWhitespace })
           }
@@ -87,6 +97,7 @@ export function OptionsBar({
         <Checkbox
           label="Ignore line endings (CRLF)"
           checked={options.ignoreLineEndings}
+          disabled={disabled}
           onChange={(ignoreLineEndings) =>
             onOptionsChange({ ...options, ignoreLineEndings })
           }
@@ -97,6 +108,7 @@ export function OptionsBar({
         <Select
           ariaLabel="Context lines"
           value={String(options.context)}
+          disabled={disabled}
           onChange={(value) =>
             onOptionsChange({
               ...options,
@@ -114,6 +126,7 @@ export function OptionsBar({
         <Select
           ariaLabel="Granularity"
           value={options.granularity}
+          disabled={disabled}
           onChange={(value) =>
             onOptionsChange({ ...options, granularity: value as Granularity })
           }
@@ -128,11 +141,13 @@ export function OptionsBar({
         <Checkbox
           label="Wrap lines"
           checked={wrap}
+          disabled={disabled}
           onChange={onWrapChange}
         />
         <Checkbox
           label="Line numbers"
           checked={lineNumbers}
+          disabled={disabled}
           onChange={onLineNumbersChange}
         />
       </div>

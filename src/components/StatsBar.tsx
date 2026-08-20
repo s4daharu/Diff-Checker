@@ -62,8 +62,15 @@ export function StatsBar({
         setExportOpen(false);
       }
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportOpen(false);
+    };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [exportOpen]);
 
   if (!stats) return null;
@@ -206,13 +213,15 @@ export function StatsBar({
             <div className="dropdown-wrapper" ref={exportMenuRef}>
               <button
                 type="button"
-                className="btn btn--small btn--icon"
+                className="btn btn--small"
                 onClick={() => setExportOpen((o) => !o)}
                 title="Export options (Markdown, HTML report)"
                 aria-label="Export options"
                 aria-expanded={exportOpen}
+                aria-haspopup="menu"
               >
                 <FileCodeIcon size={14} />
+                <span className="btn__label">Export</span>
               </button>
 
               {exportOpen && (
@@ -259,6 +268,7 @@ export function StatsBar({
             placeholder="Search text within differences..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
+            aria-label="Search within diff"
             autoFocus
           />
           {searchQuery && (

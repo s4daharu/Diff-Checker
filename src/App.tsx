@@ -115,6 +115,7 @@ export default function App() {
   const [copied, setCopied] = useState(false);
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [toastUndo, setToastUndo] = useState<(() => void) | null>(null);
   const [renderAll, setRenderAll] = useState(false);
   const [globalDrag, setGlobalDrag] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -135,15 +136,19 @@ export default function App() {
 
   const showToast = useCallback((message: string) => {
     setToast(message);
+    setToastUndo(null);
     window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 4000);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+      setToastUndo(null);
+    }, 4000);
   }, []);
 
-  const makeWorker = useCallback(() => {
-    const w = new Worker(
-      new URL('./diffWorker.ts', import.meta.url),
-      { type: 'module' },
-    );
+  const ensureWorker = useCallback(() => {
+    if (workerRef.current) return workerRef.current;
+    const w = new Worker(new URL('./diffWorker.ts', import.meta.url), {
+      type: 'module',
+    });
     w.onmessage = (e: MessageEvent<WorkerResponse>) => {
       const msg = e.data;
       if (msg.id !== seqRef.current) return;
@@ -156,6 +161,11 @@ export default function App() {
       setResult(msg.result ?? null);
       setPatch(msg.patch ?? null);
     };
+    w.onerror = () => {
+      setComputing(false);
+      showToast('Diff worker failed — try smaller inputs.');
+    };
+    workerRef.current = w;
     return w;
   }, [showToast]);
 
@@ -185,20 +195,26 @@ export default function App() {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    ensureWorker();
+    return () => {
       workerRef.current?.terminate();
-    },
-    [],
-  );
+      workerRef.current = null;
+    };
+  }, [ensureWorker]);
 
   useEffect(() => {
+    if (oldText === '' && newText === '') {
+      setResult(null);
+      setPatch(null);
+      setComputing(false);
+      return;
+    }
     setComputing(true);
     const id = ++seqRef.current;
     const timer = window.setTimeout(() => {
-      workerRef.current?.terminate();
-      workerRef.current = makeWorker();
-      workerRef.current.postMessage({
+      const w = ensureWorker();
+      w.postMessage({
         id,
         oldText,
         newText,
@@ -208,7 +224,7 @@ export default function App() {
       });
     }, DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [oldText, newText, options, fileNames, makeWorker]);
+  }, [oldText, newText, options, fileNames, ensureWorker]);
 
   // Reset expanded gaps when inputs or context settings change
   useEffect(() => {
@@ -220,17 +236,22 @@ export default function App() {
   useEffect(() => {
     const hasFiles = (e: DragEvent) =>
       Array.from(e.dataTransfer?.types ?? []).includes('Files');
+    let dragCounter = 0;
     const onDragEnter = (e: DragEvent) => {
-      if (hasFiles(e)) setGlobalDrag(true);
+      if (!hasFiles(e)) return;
+      dragCounter++;
+      setGlobalDrag(true);
     };
     const onDragOver = (e: DragEvent) => {
-      e.preventDefault();
+      if (hasFiles(e)) e.preventDefault();
     };
-    const onDragLeave = (e: DragEvent) => {
-      if (!e.relatedTarget) setGlobalDrag(false);
+    const onDragLeave = () => {
+      dragCounter = Math.max(0, dragCounter - 1);
+      if (dragCounter === 0) setGlobalDrag(false);
     };
     const onDrop = (e: DragEvent) => {
       e.preventDefault();
+      dragCounter = 0;
       setGlobalDrag(false);
       const file = e.dataTransfer?.files?.[0];
       if (!file) return;
@@ -255,11 +276,13 @@ export default function App() {
     window.addEventListener('dragover', onDragOver);
     window.addEventListener('dragleave', onDragLeave);
     window.addEventListener('drop', onDrop);
+    window.addEventListener('dragend', onDragLeave);
     return () => {
       window.removeEventListener('dragenter', onDragEnter);
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('dragleave', onDragLeave);
       window.removeEventListener('drop', onDrop);
+      window.removeEventListener('dragend', onDragLeave);
     };
   }, [showToast]);
 
@@ -272,6 +295,11 @@ export default function App() {
   }, [oldText, newText]);
 
   const handleNewDiff = useCallback(() => {
+    const total = oldText.length + newText.length;
+    const prevOld = oldText;
+    const prevNew = newText;
+    const prevNames = fileNames;
+    const prevOptions = options;
     setOldText('');
     setNewText('');
     setOptions(DEFAULT_OPTIONS);
@@ -285,7 +313,30 @@ export default function App() {
     save(storageKeys.oldText, '');
     save(storageKeys.newText, '');
     save(storageKeys.options, DEFAULT_OPTIONS);
-  }, [setOptions]);
+    if (total > 0) {
+      window.clearTimeout(toastTimerRef.current);
+      setToast('Cleared');
+      const undo = () => {
+        setOldText(prevOld);
+        setNewText(prevNew);
+        setFileNames(prevNames);
+        setOptions(prevOptions);
+        save(storageKeys.oldText, prevOld);
+        save(storageKeys.newText, prevNew);
+        save(storageKeys.options, prevOptions);
+        setToast('Restored');
+        setToastUndo(null);
+        window.clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = window.setTimeout(() => setToast(null), 2000);
+      };
+      setToastUndo(() => undo);
+      const id = window.setTimeout(() => {
+        setToast(null);
+        setToastUndo(null);
+      }, 6000);
+      toastTimerRef.current = id;
+    }
+  }, [setOptions, oldText, newText, fileNames, options]);
 
   const handleLoadSample = useCallback(() => {
     setOldText(SAMPLE_ORIGINAL);
@@ -337,18 +388,25 @@ export default function App() {
     }
   }, [result, options.context, fileNames, showToast]);
 
-  const handleDownloadPatch = useCallback(() => {
-    if (patch === null) return;
-    const blob = new Blob([patch], { type: 'text/plain' });
+  const triggerDownload = useCallback((blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, []);
+
+  const handleDownloadPatch = useCallback(() => {
+    if (patch === null) return;
+    const blob = new Blob([patch], { type: 'text/plain' });
     const base = (name: string | null) =>
       name ? name.replace(/\.[^./\\]+$/, '') : 'diff';
-    a.download = `${base(fileNames.new)}.patch`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [patch, fileNames.new]);
+    triggerDownload(blob, `${base(fileNames.new)}.patch`);
+  }, [patch, fileNames.new, triggerDownload]);
 
   const handleExportHtml = useCallback(() => {
     if (!result || result.rows.length === 0) return;
@@ -359,15 +417,10 @@ export default function App() {
       newName: fileNames.new ?? 'changed.txt',
     });
     const blob = new Blob([html], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
     const base = (name: string | null) =>
       name ? name.replace(/\.[^./\\]+$/, '') : 'diff';
-    a.download = `${base(fileNames.new)}-report.html`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [result, options.context, expandedIndices, fileNames]);
+    triggerDownload(blob, `${base(fileNames.new)}-report.html`);
+  }, [result, options.context, expandedIndices, fileNames, triggerDownload]);
 
   const handleExpandGap = useCallback(
     (startRow: number, endRow: number) => {
@@ -439,6 +492,12 @@ export default function App() {
         (target.tagName === 'TEXTAREA' ||
           (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text'));
 
+      if (e.key === 'Escape' && searchOpen) {
+        e.preventDefault();
+        setSearchOpen(false);
+        return;
+      }
+
       if (e.key === '?' && !inInput && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
         setShortcutsOpen((o) => !o);
@@ -478,8 +537,12 @@ export default function App() {
         e.preventDefault();
         handleDownloadPatch();
       } else if (key === 'f') {
-        e.preventDefault();
-        setSearchOpen((o) => !o);
+        // Only hijack Ctrl/Cmd+F when a diff is visible; otherwise allow native find.
+        if (hasInput && result && (result.rows.length > 0 || identical)) {
+          e.preventDefault();
+          setSearchOpen((o) => !o);
+        }
+        return;
       } else if (key === 'e') {
         e.preventDefault();
         document
@@ -489,10 +552,22 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [setViewMode, handleDownloadPatch, handleNextChange, handlePrevChange]);
+  }, [
+    setViewMode,
+    handleDownloadPatch,
+    handleNextChange,
+    handlePrevChange,
+    hasInput,
+    result,
+    identical,
+    searchOpen,
+  ]);
 
   return (
     <div className="app">
+      <a href="#main-content" className="skip-link">
+        Skip to diff
+      </a>
       <Header
         theme={theme}
         onToggleTheme={() => {
@@ -505,7 +580,7 @@ export default function App() {
         onOpenShortcuts={() => setShortcutsOpen(true)}
       />
 
-      <main className="main">
+      <main id="main-content" className="main">
         <div className="panels">
           <InputPanel
             title="Original text"
@@ -542,18 +617,17 @@ export default function App() {
           />
         </div>
 
-        {hasInput && (
-          <OptionsBar
-            options={options}
-            onOptionsChange={setOptions}
-            viewMode={viewMode}
-            onViewModeChange={setViewMode}
-            wrap={wrap}
-            onWrapChange={setWrap}
-            lineNumbers={lineNumbers}
-            onLineNumbersChange={setLineNumbers}
-          />
-        )}
+        <OptionsBar
+          options={options}
+          onOptionsChange={setOptions}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          wrap={wrap}
+          onWrapChange={setWrap}
+          lineNumbers={lineNumbers}
+          onLineNumbersChange={setLineNumbers}
+          disabled={!hasInput}
+        />
 
         <section className="results" aria-live="polite">
           {!hasInput && (
@@ -618,7 +692,8 @@ export default function App() {
               {totalRows > RENDER_CAP && !renderAll && (
                 <div className="notice notice--muted">
                   Showing the first {RENDER_CAP.toLocaleString()} of{' '}
-                  {totalRows.toLocaleString()} rows.
+                  {totalRows.toLocaleString()} rows — rendering all may be
+                  slow for very large diffs.
                   <button
                     type="button"
                     className="btn btn--small"
@@ -642,6 +717,15 @@ export default function App() {
         <p>
           OpenDiff — an open source diff checker. Runs entirely in your browser;
           no data is uploaded anywhere. Built with React, TypeScript and jsdiff.
+          <span style={{ margin: '0 8px', opacity: 0.5 }}>·</span>
+          <button
+            type="button"
+            className="btn btn--ghost btn--small"
+            style={{ padding: '2px 8px', fontSize: 12 }}
+            onClick={() => setShortcutsOpen(true)}
+          >
+            Shortcuts ?
+          </button>
         </p>
       </footer>
 
@@ -652,12 +736,40 @@ export default function App() {
       )}
 
       {toast && (
-        <div className="toast" role="alert">
-          {toast}
+        <div
+          className="toast"
+          role="status"
+          aria-live="polite"
+          onMouseEnter={() => window.clearTimeout(toastTimerRef.current)}
+          onMouseLeave={() => {
+            toastTimerRef.current = window.setTimeout(() => {
+              setToast(null);
+              setToastUndo(null);
+            }, 2000);
+          }}
+        >
+          <span>{toast}</span>
+          {toastUndo && (
+            <button
+              type="button"
+              className="btn btn--small"
+              style={{ marginLeft: 4, background: '#fff', color: '#111' }}
+              onClick={() => {
+                const fn = toastUndo;
+                setToastUndo(null);
+                fn();
+              }}
+            >
+              Undo
+            </button>
+          )}
           <button
             type="button"
             className="toast__close"
-            onClick={() => setToast(null)}
+            onClick={() => {
+              setToast(null);
+              setToastUndo(null);
+            }}
             aria-label="Dismiss"
           >
             ×

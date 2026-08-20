@@ -24,20 +24,35 @@ export function KeyboardShortcutsModal({
 }: KeyboardShortcutsModalProps) {
   useEffect(() => {
     if (!isOpen) return;
+    const prev = document.activeElement as HTMLElement | null;
+    const card = document.querySelector<HTMLElement>('.modal-card');
+    card?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
         onClose();
       }
     };
+    // focus trap: keep focus inside modal
+    const onFocus = (e: FocusEvent) => {
+      if (!card?.contains(e.target as Node)) {
+        e.preventDefault();
+        card?.focus();
+      }
+    };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    document.addEventListener('focusin', onFocus as unknown as EventListener);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('focusin', onFocus as unknown as EventListener);
+      prev?.focus();
+    };
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true">
+    <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="shortcuts-title">
       <div
         className="modal-card"
         onClick={(e) => e.stopPropagation()}
@@ -46,7 +61,7 @@ export function KeyboardShortcutsModal({
         <header className="modal-header">
           <div className="modal-title">
             <KeyboardIcon size={18} />
-            <h3>Keyboard Shortcuts</h3>
+            <h3 id="shortcuts-title">Keyboard Shortcuts</h3>
           </div>
           <button
             type="button"

@@ -104,11 +104,14 @@ const RowSide = memo(function RowSide({
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard?.writeText(line).then(() => {
-      setCopied(true);
-      onCopy?.('Copied line to clipboard');
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      ?.writeText(line)
+      .then(() => {
+        setCopied(true);
+        onCopy?.('Copied line to clipboard');
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => onCopy?.('Clipboard permission denied'));
   };
 
   return (
@@ -222,29 +225,59 @@ function MinimapGutter({
   const markers = useMemo(() => {
     const total = rows.length;
     if (total === 0) return [];
-    const list: { index: number; percent: number; kind: string }[] = [];
+    // bucket markers to avoid overlapping clutter on huge files
+    const buckets = new Map<number, { index: number; kind: string }>();
     rows.forEach((row, i) => {
       if (row.kind !== 'equal' && row.kind !== 'gap') {
-        list.push({
-          index: i,
-          percent: (i / Math.max(1, total - 1)) * 100,
-          kind: row.kind,
-        });
+        const bucket = Math.floor((i / Math.max(1, total)) * 200);
+        if (!buckets.has(bucket)) {
+          buckets.set(bucket, { index: i, kind: row.kind as string });
+        }
       }
     });
+    const list: { index: number; percent: number; kind: string }[] = [];
+    for (const [bucket, v] of buckets) {
+      list.push({
+        index: v.index,
+        percent: (bucket / 200) * 100,
+        kind: v.kind,
+      });
+    }
     return list;
   }, [rows]);
 
   if (markers.length === 0) return null;
 
+  const handleGutterClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const pct = y / rect.height;
+    const targetIndex = Math.floor(pct * rows.length);
+    // find nearest diff marker
+    let nearest = markers[0]?.index ?? 0;
+    let best = Infinity;
+    for (const m of markers) {
+      const d = Math.abs(m.index - targetIndex);
+      if (d < best) {
+        best = d;
+        nearest = m.index;
+      }
+    }
+    onJumpToRow(nearest);
+  };
+
   return (
-    <div className="diff-minimap" aria-hidden="true" title="Difference minimap — click to jump">
+    <div
+      className="diff-minimap"
+      aria-hidden="true"
+      title="Difference minimap — click to jump to nearest change"
+      onClick={handleGutterClick}
+    >
       {markers.map((m) => (
         <div
           key={m.index}
           className={`minimap-marker minimap-marker--${m.kind}`}
           style={{ top: `${m.percent}%` }}
-          onClick={() => onJumpToRow(m.index)}
         />
       ))}
     </div>
@@ -370,7 +403,10 @@ function InlineView({
   }, [rows]);
 
   const jumpToRow = (rowIndex: number) => {
-    const el = document.getElementById(`diff-row-inline-p${rowIndex}`);
+    const el =
+      document.getElementById(`diff-row-inline-p${rowIndex}-0`) ??
+      document.getElementById(`diff-row-inline-p${rowIndex}-1`) ??
+      document.getElementById(`diff-row-inline-p${rowIndex}`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
@@ -378,11 +414,14 @@ function InlineView({
 
   const handleCopyLine = (text: string, idx: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard?.writeText(text).then(() => {
-      setCopiedIdx(idx);
-      onCopyNotice?.('Copied line to clipboard');
-      setTimeout(() => setCopiedIdx(null), 1500);
-    });
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setCopiedIdx(idx);
+        onCopyNotice?.('Copied line to clipboard');
+        setTimeout(() => setCopiedIdx(null), 1500);
+      })
+      .catch(() => onCopyNotice?.('Clipboard permission denied'));
   };
 
   return (
@@ -400,7 +439,7 @@ function InlineView({
         className={`diff-scroll ${wrap ? 'diff-scroll--wrap' : ''}`}
       >
         <div className="diff-rows-container">
-          {expandedRows.map(({ row, sign, parentRowIndex }, i) => {
+          {expandedRows.map(({ row, sign, parentRowIndex, subIndex }, i) => {
             if (row.kind === 'gap') {
               return (
                 <GapRow key={i} row={row} onExpandGap={onExpandGap} />
@@ -423,7 +462,7 @@ function InlineView({
 
             return (
               <div
-                id={`diff-row-inline-p${parentRowIndex}`}
+                id={`diff-row-inline-p${parentRowIndex}-${subIndex}`}
                 key={i}
                 className={`diff-row diff-row--${kind} ${
                   activeChangeRowIndex === parentRowIndex
@@ -487,15 +526,18 @@ function InlineView({
 export function DiffView(props: DiffViewProps) {
   useEffect(() => {
     if (props.activeChangeRowIndex != null) {
-      const prefix =
-        props.viewMode === 'side-by-side'
-          ? 'diff-row-side-'
-          : 'diff-row-inline-p';
-      const el = document.getElementById(
-        `${prefix}${props.activeChangeRowIndex}`,
-      );
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (props.viewMode === 'side-by-side') {
+        const el = document.getElementById(
+          `diff-row-side-${props.activeChangeRowIndex}`,
+        );
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        // inline modified rows have two sub-rows; prefer the '-' then '+'
+        const el0 = document.getElementById(
+          `diff-row-inline-p${props.activeChangeRowIndex}-0`,
+        );
+        const el = el0 ?? document.getElementById(`diff-row-inline-p${props.activeChangeRowIndex}-1`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }
   }, [props.activeChangeRowIndex, props.viewMode]);
