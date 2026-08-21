@@ -44,13 +44,29 @@ page.on('console', (m) => {
 
 await page.goto(`http://localhost:${PORT}/`, { waitUntil: 'networkidle' });
 
+const openSidebarOptions = async () => {
+  const details = page.locator('.sidebar-options');
+  if ((await details.getAttribute('open')) === null) {
+    await details.locator('summary').click();
+  }
+};
+
 check('no console/page errors on load', errors.length === 0, errors.join(' | '));
 
 const emptyVisible = await page.locator('.empty').isVisible();
 check('empty state visible initially', emptyVisible);
 
+// Landing mode shows the input panels directly
+const landingPanels = await page.locator('.input-panel--left textarea').count();
+check('landing mode shows input panels', landingPanels === 1);
+
 await page.getByRole('button', { name: 'Try with sample text' }).click();
 await page.waitForSelector('.diff-view--side', { timeout: 5000 });
+
+// Workspace mode: sources bar + sidebar + toolbar + diff canvas
+check('sources bar visible', await page.locator('.sources-bar').isVisible());
+check('sidebar visible', await page.locator('.diff-sidebar').isVisible());
+check('toolbar visible', await page.locator('.diff-toolbar').isVisible());
 
 const rows = await page
   .locator('.diff-row--modified, .diff-row--added, .diff-row--deleted')
@@ -63,6 +79,14 @@ check('stats pills show', pillText.length === 4, pillText.join(', '));
 const hlCount = await page.locator('.hl--add, .hl--del').count();
 check('intra-line highlights render', hlCount > 0, `hl=${hlCount}`);
 
+// change outline list in the sidebar
+const changeItems = await page.locator('.change-item').count();
+check('change outline list renders', changeItems > 3, `items=${changeItems}`);
+await page.locator('.change-item').first().click();
+await page.waitForTimeout(300);
+const activeRow = await page.locator('.diff-row--active').count();
+check('outline click jumps to change', activeRow === 1);
+
 // toggle inline view
 await page.getByRole('tab', { name: 'Inline' }).click();
 await page.waitForSelector('.diff-view--inline');
@@ -70,6 +94,7 @@ const signCount = await page.locator('.sign--added, .sign--deleted').count();
 check('inline view shows signs', signCount > 0, `signs=${signCount}`);
 
 // context=0
+await openSidebarOptions();
 await page.getByLabel('Context lines').selectOption('0');
 await page.waitForTimeout(600);
 const gapCount = await page.locator('.diff-row--gap').count();
@@ -77,46 +102,59 @@ check('context 0 produces gaps', gapCount >= 2, `gaps=${gapCount}`);
 
 // ignore case option
 await page.getByLabel('Context lines').selectOption('all');
-const ta = page.locator('.input-panel--left textarea');
-const ta2 = page.locator('.input-panel--right textarea');
+
+// open the source editor drawer to edit texts
+const editSources = () => page.getByRole('button', { name: 'Edit sources' }).click();
+const closeEditor = () =>
+  page.getByRole('button', { name: 'Done', exact: true }).click();
+
+await editSources();
+await page.waitForSelector('.source-editor');
+const ta = page.locator('.source-editor .input-panel--left textarea');
+const ta2 = page.locator('.source-editor .input-panel--right textarea');
 await ta.fill('HELLO WORLD\nsecond line\nthird line\n');
 await ta2.fill('hello world\nsecond line\nthird line\n');
+await closeEditor();
 await page.waitForTimeout(800);
-let msgCount = await page.locator('.statsbar__message').count();
+let msgCount = await page.locator('.sidebar-identical-msg').count();
 check('case-differing texts show as different (no identical banner)', msgCount === 0, `count=${msgCount}`);
 
-// copy patch button enabled
-const copyBtn = page.locator('.statsbar__actions .btn').first();
-check('copy patch enabled', await copyBtn.isEnabled());
-
-// download patch
+// export menu: copy patch enabled, download works
+await page.getByRole('button', { name: 'Export options' }).click();
+await page.waitForSelector('.dropdown-menu');
+const copyItem = page.getByRole('button', { name: 'Copy patch' });
+check('copy patch enabled', await copyItem.isEnabled());
 const downloadPromise = page.waitForEvent('download');
-await page.locator('.statsbar__actions .btn').nth(1).click();
+await page.getByRole('button', { name: 'Download .patch' }).click();
 const download = await downloadPromise;
 check('download works', download.suggestedFilename() === 'diff.patch', download.suggestedFilename());
 
+await openSidebarOptions();
 await page.getByLabel('Ignore case').check();
 await page.waitForTimeout(800);
-const msg = await page.locator('.statsbar__message').textContent();
+const msg = await page.locator('.sidebar-identical-msg').textContent();
 check('ignore case → identical', !!msg && msg.includes('No differences'), msg);
 
-// swap
+// swap from the sources bar
 await page.getByLabel('Swap texts').click();
+await editSources();
 const leftVal = await ta.inputValue();
 check('swap works', leftVal === 'hello world\nsecond line\nthird line\n', leftVal);
 
-// identical texts state
+// identical texts state (editor is already open)
 await ta.fill('same\n');
 await ta2.fill('same\n');
+await closeEditor();
 await page.waitForTimeout(800);
-const identical = await page.locator('.statsbar--identical').count();
+const identical = await page.locator('.sidebar-identical-msg').count();
 check('identical banner', identical === 1);
 
-// file upload via file chooser
+// file upload via file chooser inside the editor drawer
+await editSources();
 await ta.fill('file one\n');
 await ta2.fill('');
 const chooserPromise = page.waitForEvent('filechooser');
-await page.locator('.input-panel--right').getByRole('button', { name: 'Open file' }).click();
+await page.locator('.source-editor .input-panel--right').getByRole('button', { name: 'Open file' }).click();
 const chooser = await chooserPromise;
 await chooser.setFiles({
   name: 'test.txt',
@@ -126,6 +164,7 @@ await chooser.setFiles({
 await page.waitForTimeout(800);
 const rightVal = await ta2.inputValue();
 check('file upload reads text', rightVal === 'file one\nsecond\n', rightVal);
+await closeEditor();
 
 // theme toggle
 const themeBefore = await page.evaluate(() => document.documentElement.dataset.theme);
@@ -147,9 +186,11 @@ const setValue = (locator, text) =>
     setter.call(el, value);
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }, text);
+await editSources();
 const t0 = Date.now();
 await setValue(ta, big);
 await setValue(ta2, big.replace('line number 1000', 'line number CHANGED'));
+await closeEditor();
 // view is currently Inline: a modified row renders as a '-'/'+' row pair
 await page.waitForSelector('.diff-row--added', { timeout: 10000 });
 const perf = Date.now() - t0;
@@ -162,28 +203,32 @@ check('modified row in side-by-side', (await page.locator('.diff-row--modified')
 
 // wrap toggle: long line must wrap instead of horizontally scrolling
 const longLine = 'y'.repeat(2000);
+await editSources();
 await setValue(ta, 'a\n' + longLine + '\nb\n');
 await setValue(ta2, 'a\n' + longLine + '\nc\n');
+await closeEditor();
 await page.waitForTimeout(900);
 const overflowBefore = await page.evaluate(() => {
   const s = document.querySelector('.diff-scroll');
   return s.scrollWidth - s.clientWidth;
 });
 check('no wrap: horizontal overflow present', overflowBefore > 200, `overflow=${overflowBefore}px`);
-await page.getByLabel('Wrap lines').check();
+await page.getByLabel('Wrap lines').click();
 await page.waitForTimeout(900);
 const overflowAfter = await page.evaluate(() => {
   const s = document.querySelector('.diff-scroll');
   return s.scrollWidth - s.clientWidth;
 });
 check('wrap on: no horizontal overflow', overflowAfter < 100, `overflow=${overflowAfter}px`);
-await page.getByLabel('Wrap lines').uncheck();
+await page.getByLabel('Wrap lines').click();
 
 // new diff: clears panels but keeps theme preference
 const themeBeforeNew = await page.evaluate(() => document.documentElement.dataset.theme);
 await page.getByRole('button', { name: 'New diff' }).click();
 await page.waitForTimeout(400);
-const cleared = (await ta.inputValue()) === '' && (await ta2.inputValue()) === '';
+const cleared =
+  (await page.locator('.input-panel--left textarea').inputValue()) === '' &&
+  (await page.locator('.input-panel--right textarea').inputValue()) === '';
 const themeAfterNew = await page.evaluate(() => document.documentElement.dataset.theme);
 check('new diff clears panels', cleared);
 check('new diff keeps theme', themeBeforeNew === themeAfterNew, `${themeBeforeNew} → ${themeAfterNew}`);
@@ -197,6 +242,14 @@ check('ctrl+2 switches to inline view', true);
 await page.keyboard.press('Control+1');
 await page.waitForSelector('.diff-view--side');
 check('ctrl+1 switches to side-by-side view', true);
+
+// ctrl+e opens the source editor
+await page.keyboard.press('Control+e');
+await page.waitForSelector('.source-editor');
+check('ctrl+e opens source editor', true);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(300);
+check('escape closes source editor', !(await page.locator('.source-editor').isVisible()));
 
 // arrow keys navigate the view-mode tablist
 await page.locator('.segmented__btn').first().focus();
@@ -222,6 +275,7 @@ await page.evaluate(() => {
   );
 });
 await page.waitForTimeout(400);
+await editSources();
 const droppedVal = await ta.inputValue();
 check('drop anywhere fills left panel', droppedVal === 'dropped left\ncontent\n', droppedVal);
 
@@ -230,6 +284,7 @@ let huge = '';
 for (let i = 0; i < 25000; i++) huge += `row ${i}\n`;
 await setValue(ta, huge);
 await setValue(ta2, huge);
+await closeEditor();
 await page.waitForSelector('.notice--muted >> text=Showing the first', { timeout: 20000 });
 const capText = await page.locator('.notice--muted').textContent();
 check('render cap notice shows', !!capText && capText.includes('12,000'), capText);
@@ -241,8 +296,9 @@ const allRows = await page.locator('.diff-row--equal').count();
 check('render all renders every row', allRows >= 24000, `rows=${allRows}`);
 
 // uploaded file name appears in the patch header
+await editSources();
 const chooser2Promise = page.waitForEvent('filechooser');
-await page.locator('.input-panel--left').getByRole('button', { name: 'Open file' }).click();
+await page.locator('.source-editor .input-panel--left').getByRole('button', { name: 'Open file' }).click();
 const chooser2 = await chooser2Promise;
 await chooser2.setFiles({
   name: 'orig.txt',
@@ -250,8 +306,10 @@ await chooser2.setFiles({
   buffer: Buffer.from('a\nb\n'),
 });
 await page.waitForTimeout(800);
+await closeEditor();
 const dl2Promise = page.waitForEvent('download');
-await page.locator('.statsbar__actions .btn').nth(1).click();
+await page.getByRole('button', { name: 'Export options' }).click();
+await page.getByRole('button', { name: 'Download .patch' }).click();
 const dl2 = await dl2Promise;
 const dl2Path = await dl2.path();
 const patchText = readFileSync(dl2Path, 'utf8');
@@ -261,6 +319,7 @@ check('patch header uses uploaded name', patchText.includes('--- orig.txt'), pat
 await page.getByRole('button', { name: 'New diff' }).click();
 await page.getByRole('button', { name: 'Try with sample text' }).click();
 await page.waitForSelector('.diff-view--side', { timeout: 5000 });
+await openSidebarOptions();
 await page.getByLabel('Context lines').selectOption('0');
 await page.waitForTimeout(600);
 const gapBtnsBefore = await page.locator('.gap-btn').count();
@@ -280,8 +339,10 @@ await page.getByTitle('Next difference (Alt+N or Alt+Down)').click();
 await page.waitForTimeout(300);
 const navLabelAfter = await page.locator('.diff-nav-label').textContent();
 check('nav next updates change index', !!navLabelAfter && navLabelAfter.includes('1 of'), navLabelAfter);
-const activeRow = await page.locator('.diff-row--active').count();
-check('active change row highlighted', activeRow === 1);
+const activeRowNav = await page.locator('.diff-row--active').count();
+check('active change row highlighted', activeRowNav === 1);
+const activeItem = await page.locator('.change-item--active').count();
+check('active outline item highlighted', activeItem === 1);
 
 // diff search
 await page.getByRole('button', { name: 'Find' }).click();
@@ -298,18 +359,20 @@ await page.getByRole('button', { name: 'Samples' }).click();
 await page.waitForSelector('.dropdown-menu');
 await page.getByRole('button', { name: /API Config/ }).click();
 await page.waitForTimeout(600);
-const jsonVal = await page.locator('.input-panel--left textarea').inputValue();
+await editSources();
+const jsonVal = await ta.inputValue();
 check('preset loaded JSON text', jsonVal.includes('CloudMetrics'), jsonVal.slice(0, 40));
 
 // text tools transform
 const testJson = '{"z": 100, "a": 200}';
-await page.locator('.input-panel--left textarea').fill(testJson);
-await page.locator('.input-panel--left').getByTitle(/Text tools/).click();
+await ta.fill(testJson);
+await page.locator('.source-editor .input-panel--left').getByTitle(/Text tools/).click();
 await page.waitForSelector('.dropdown-item >> text=Format / Prettify JSON');
 await page.getByRole('button', { name: 'Format / Prettify JSON' }).click();
 await page.waitForTimeout(300);
-const formattedVal = await page.locator('.input-panel--left textarea').inputValue();
+const formattedVal = await ta.inputValue();
 check('text tool formatted JSON', formattedVal.includes('\n  "z": 100'), formattedVal);
+await closeEditor();
 
 // keyboard shortcuts modal
 await page.getByTitle(/Keyboard shortcuts/).click();

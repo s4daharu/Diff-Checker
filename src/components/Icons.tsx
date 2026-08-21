@@ -188,6 +188,66 @@ export const ExpandAllIcon = (p: IconProps) =>
     </>,
   );
 
+export const PencilIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      <path d="m15 5 4 4" />
+    </>,
+  );
+
+export const WrapTextIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M3 6h18" />
+      <path d="M3 12h14a3 3 0 1 1 0 6h-3" />
+      <path d="m16 16-2 2 2 2" />
+      <path d="M3 18h6" />
+    </>,
+  );
+
+export const HashIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M4 9h16" />
+      <path d="M4 15h16" />
+      <path d="M10 3 8 21" />
+      <path d="m16 3-2 18" />
+    </>,
+  );
+
+export const ListIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M8 6h13" />
+      <path d="M8 12h13" />
+      <path d="M8 18h13" />
+      <path d="M3 6h.01" />
+      <path d="M3 12h.01" />
+      <path d="M3 18h.01" />
+    </>,
+  );
+
+export const SlidersIcon = (p: IconProps) =>
+  base(
+    p,
+    <>
+      <path d="M21 4h-7" />
+      <path d="M10 4H3" />
+      <circle cx="12" cy="4" r="2" />
+      <path d="M21 12h-9" />
+      <path d="M8 12H3" />
+      <circle cx="10" cy="12" r="2" />
+      <path d="M21 20h-5" />
+      <path d="M12 20H3" />
+      <circle cx="14" cy="20" r="2" />
+    </>,
+  );
+
 export const LogoIcon = ({ size = 24 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
     <rect x="2" y="4" width="12" height="24" rx="3" fill="var(--del-text, #e5484d)" opacity="0.95" />

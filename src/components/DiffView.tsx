@@ -1,4 +1,5 @@
 import { memo, useMemo, useRef, useState, useEffect } from 'react';
+import type { ThemedToken } from 'shiki';
 import type { DiffRow, Span, ViewMode } from '../lib/types';
 import {
   CopyIcon,
@@ -17,6 +18,7 @@ interface DiffViewProps {
   activeChangeRowIndex?: number | null;
   onExpandGap?: (startRow: number, endRow: number, count: number) => void;
   onCopyNotice?: (msg: string) => void;
+  getTokens?: ((line: string) => ThemedToken[] | null) | null;
 }
 
 function highlightMatches(text: string, query?: string) {
@@ -74,18 +76,45 @@ function SpanText({
   );
 }
 
+function SyntaxText({
+  tokens,
+  line,
+  searchQuery,
+}: {
+  tokens: ThemedToken[] | null;
+  line: string;
+  searchQuery?: string;
+}) {
+  if (!tokens || tokens.length === 0) {
+    return <>{highlightMatches(line, searchQuery)}</>;
+  }
+  return (
+    <>
+      {tokens.map((token, i) =>
+        token.content ? (
+          <span key={i} style={{ color: token.color }}>
+            {highlightMatches(token.content, searchQuery)}
+          </span>
+        ) : null,
+      )}
+    </>
+  );
+}
+
 const RowSide = memo(function RowSide({
   row,
   side,
   lineNumbers,
   searchQuery,
   onCopy,
+  getTokens,
 }: {
   row: DiffRow;
   side: 'old' | 'new';
   lineNumbers: boolean;
   searchQuery?: string;
   onCopy?: (text: string) => void;
+  getTokens?: ((line: string) => ThemedToken[] | null) | null;
 }) {
   const isOld = side === 'old';
   const line = isOld ? row.oldLine : row.newLine;
@@ -121,9 +150,14 @@ const RowSide = memo(function RowSide({
         <span className="cell__text">
           {spans ? (
             <SpanText spans={spans} searchQuery={searchQuery} />
-          ) : (
-            highlightMatches(line, searchQuery)
-          )}
+          ) : getTokens ? (
+            <SyntaxText
+              tokens={getTokens(line)}
+              line={line}
+              searchQuery={searchQuery}
+            />
+          ) : null}
+          {!spans && !getTokens && highlightMatches(line, searchQuery)}
         </span>
         <button
           type="button"
@@ -222,37 +256,74 @@ function MinimapGutter({
   rows: DiffRow[];
   onJumpToRow: (rowIndex: number) => void;
 }) {
-  const markers = useMemo(() => {
-    const total = rows.length;
-    if (total === 0) return [];
-    // bucket markers to avoid overlapping clutter on huge files
-    const buckets = new Map<number, { index: number; kind: string }>();
-    rows.forEach((row, i) => {
-      if (row.kind !== 'equal' && row.kind !== 'gap') {
-        const bucket = Math.floor((i / Math.max(1, total)) * 200);
-        if (!buckets.has(bucket)) {
-          buckets.set(bucket, { index: i, kind: row.kind as string });
-        }
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const [markers, setMarkers] = useState<
+    { index: number; percent: number; kind: string }[]
+  >([]);
+
+  useEffect(() => {
+    const gutter = gutterRef.current;
+    if (!gutter) return;
+    const scroller = gutter.parentElement;
+    const content = scroller?.querySelector<HTMLElement>('.diff-rows-container') ?? null;
+
+    const compute = () => {
+      const total = rows.length;
+      const viewH = gutter.clientHeight;
+      const contentH = content?.scrollHeight ?? 0;
+      if (total === 0 || viewH === 0 || contentH === 0) {
+        setMarkers([]);
+        return;
       }
-    });
-    const list: { index: number; percent: number; kind: string }[] = [];
-    for (const [bucket, v] of buckets) {
-      list.push({
-        index: v.index,
-        percent: (bucket / 200) * 100,
-        kind: v.kind,
+      // Fraction of the gutter that actually contains rendered content
+      const scale = Math.min(1, contentH / viewH);
+      // bucket markers to avoid overlapping clutter on huge files
+      const buckets = new Map<number, { index: number; kind: string }>();
+      rows.forEach((row, i) => {
+        if (row.kind !== 'equal' && row.kind !== 'gap') {
+          const bucket = Math.floor((i / Math.max(1, total)) * 200);
+          if (!buckets.has(bucket)) {
+            buckets.set(bucket, { index: i, kind: row.kind as string });
+          }
+        }
       });
-    }
-    return list;
+      const list: { index: number; percent: number; kind: string }[] = [];
+      for (const [bucket, v] of buckets) {
+        list.push({
+          index: v.index,
+          percent: (bucket / 200) * scale * 100,
+          kind: v.kind,
+        });
+      }
+      setMarkers(list);
+    };
+
+    compute();
+    const ro = new ResizeObserver(compute);
+    if (content) ro.observe(content);
+    return () => ro.disconnect();
   }, [rows]);
 
-  if (markers.length === 0) return null;
+  const hasChanges = useMemo(
+    () => rows.some((r) => r.kind !== 'equal' && r.kind !== 'gap'),
+    [rows],
+  );
+
+  if (!hasChanges) return null;
 
   const handleGutterClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const pct = y / rect.height;
-    const targetIndex = Math.floor(pct * rows.length);
+    const contentH =
+      e.currentTarget.parentElement?.querySelector<HTMLElement>(
+        '.diff-rows-container',
+      )?.scrollHeight ?? 0;
+    const scale = contentH > 0 ? Math.min(1, contentH / rect.height) : 1;
+    const targetIndex = Math.max(
+      0,
+      Math.min(rows.length - 1, Math.floor((pct / scale) * rows.length)),
+    );
     // find nearest diff marker
     let nearest = markers[0]?.index ?? 0;
     let best = Infinity;
@@ -268,6 +339,7 @@ function MinimapGutter({
 
   return (
     <div
+      ref={gutterRef}
       className="diff-minimap"
       aria-hidden="true"
       title="Difference minimap — click to jump to nearest change"
@@ -292,6 +364,7 @@ function SideBySide({
   activeChangeRowIndex,
   onExpandGap,
   onCopyNotice,
+  getTokens,
 }: DiffViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -334,6 +407,7 @@ function SideBySide({
                   lineNumbers={lineNumbers}
                   searchQuery={searchQuery}
                   onCopy={onCopyNotice}
+                  getTokens={getTokens}
                 />
                 <RowSide
                   row={row}
@@ -341,6 +415,7 @@ function SideBySide({
                   lineNumbers={lineNumbers}
                   searchQuery={searchQuery}
                   onCopy={onCopyNotice}
+                  getTokens={getTokens}
                 />
               </div>
             ),
@@ -360,6 +435,7 @@ function InlineView({
   activeChangeRowIndex,
   onExpandGap,
   onCopyNotice,
+  getTokens,
 }: DiffViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
@@ -491,6 +567,12 @@ function InlineView({
                   <span className="cell__text">
                     {spans && sign !== '' ? (
                       <SpanText spans={spans} searchQuery={searchQuery} />
+                    ) : getTokens && line != null ? (
+                      <SyntaxText
+                        tokens={getTokens(line)}
+                        line={line}
+                        searchQuery={searchQuery}
+                      />
                     ) : (
                       highlightMatches(line ?? '', searchQuery)
                     )}

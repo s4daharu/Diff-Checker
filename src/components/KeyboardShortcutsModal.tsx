@@ -11,7 +11,7 @@ const SHORTCUTS = [
   { key: 'Ctrl / ⌘ + 2', desc: 'Switch to Inline unified view' },
   { key: 'Ctrl / ⌘ + S', desc: 'Download .patch file' },
   { key: 'Ctrl / ⌘ + F', desc: 'Find within diff' },
-  { key: 'Ctrl / ⌘ + E', desc: 'Focus Original (left) text panel' },
+  { key: 'Ctrl / ⌘ + E', desc: 'Open the source editor (edit both texts)' },
   { key: 'Alt + N / Alt + ↓', desc: 'Jump to Next difference' },
   { key: 'Alt + P / Alt + ↑', desc: 'Jump to Previous difference' },
   { key: '?', desc: 'Toggle keyboard shortcuts help' },

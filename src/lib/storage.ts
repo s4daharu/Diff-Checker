@@ -6,6 +6,7 @@ const KEYS = {
   wrap: 'opendiff:wrap',
   lineNumbers: 'opendiff:lineNums',
   theme: 'opendiff:theme',
+  syntax: 'opendiff:syntax',
 } as const;
 
 export function loadJson<T>(key: string, fallback: T): T {

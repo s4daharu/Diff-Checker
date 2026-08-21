@@ -8,12 +8,18 @@ with all diff computation happening in a Web Worker.
 
 ## Features
 
+- Workspace layout: diff canvas fills the viewport, with a summary sidebar
+  (stats, change outline, options) and a compact toolbar
 - Side-by-side and inline (unified) diff views
 - Intra-line highlighting at character or word granularity
+- Landing screen with dual input panels; once a diff exists, sources collapse
+  into an "Edit sources" drawer
+- Change outline list — click any change to jump straight to it
+- Difference minimap gutter with click-to-jump
 - Paste text, open files (up to 10 MB), or drag & drop
 - Ignore case / whitespace / line endings (CRLF) options
 - Adjustable context lines with hidden-region collapse
-- Diff stats, unified `.patch` export (copy or download)
+- Diff stats, find-in-diff, unified `.patch` / Markdown / HTML report export
 - Dark mode, wrap toggle, line numbers toggle
 - Inputs and preferences persisted in `localStorage`
 
@@ -24,7 +30,9 @@ with all diff computation happening in a Web Worker.
 | `Ctrl/⌘ + 1` | Side-by-side view |
 | `Ctrl/⌘ + 2` | Inline view |
 | `Ctrl/⌘ + S` | Download `.patch` |
-| `Ctrl/⌘ + E` | Focus the Original text panel |
+| `Ctrl/⌘ + F` | Find within diff |
+| `Ctrl/⌘ + E` | Open the source editor |
+| `Alt + N` / `Alt + P` | Next / previous difference |
 | `←` / `→` | Switch view from the view-mode tabs |
 
 ## Getting started

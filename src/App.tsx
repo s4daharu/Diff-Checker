@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Header } from './components/Header';
 import { InputPanel } from './components/InputPanel';
-import { OptionsBar } from './components/OptionsBar';
-import { StatsBar } from './components/StatsBar';
+import { SourcesBar } from './components/SourcesBar';
+import { DiffToolbar } from './components/DiffToolbar';
+import { DiffSidebar } from './components/DiffSidebar';
 import { DiffView } from './components/DiffView';
+import { SourceEditorModal } from './components/SourceEditorModal';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { LogoIcon, SwapIcon } from './components/Icons';
+import type { ChangeEntry } from './components/DiffSidebar';
 import {
   DEFAULT_OPTIONS,
   type DiffOptions,
@@ -25,6 +28,11 @@ import {
   buildHtmlDiffReport,
   buildMarkdownDiff,
 } from './lib/diffEngine';
+import {
+  createLineTokenizer,
+  detectLang,
+  type LineTokenizer,
+} from './lib/highlighter';
 import { MAX_FILE_BYTES } from './components/InputPanel';
 
 type Theme = 'light' | 'dark';
@@ -39,6 +47,8 @@ interface WorkerResponse {
 
 const DEBOUNCE_MS = 250;
 const RENDER_CAP = 12000;
+const CHANGE_LIST_CAP = 400;
+const SYNTAX_ROW_CAP = 4000;
 
 function usePersistedState<T>(
   key: string,
@@ -124,6 +134,13 @@ export default function App() {
   const [expandedIndices, setExpandedIndices] = useState<Set<number>>(() => new Set());
   const [currentChangeIndex, setCurrentChangeIndex] = useState<number | null>(null);
   const [activeChangeRowIndex, setActiveChangeRowIndex] = useState<number | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [syntaxEnabled, setSyntaxEnabled] = usePersistedState(
+    storageKeys.syntax,
+    true,
+    (v) => v === true,
+  );
+  const [tokenizer, setTokenizer] = useState<LineTokenizer | null>(null);
   const [fileNames, setFileNames] = useState<{
     old: string | null;
     new: string | null;
@@ -203,6 +220,24 @@ export default function App() {
     };
   }, [ensureWorker]);
 
+  const syntaxLang = useMemo(
+    () => detectLang(fileNames.old, fileNames.new, oldText || newText),
+    [fileNames.old, fileNames.new, oldText, newText],
+  );
+
+  useEffect(() => {
+    if (!syntaxEnabled) {
+      setTokenizer(null);
+      return;
+    }
+    let cancelled = false;
+    createLineTokenizer(syntaxLang, theme).then((t) => {
+      if (!cancelled) setTokenizer(t);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [syntaxEnabled, syntaxLang, theme]);
   useEffect(() => {
     if (oldText === '' && newText === '') {
       setResult(null);
@@ -310,6 +345,7 @@ export default function App() {
     setActiveChangeRowIndex(null);
     setSearchQuery('');
     setSearchOpen(false);
+    setEditorOpen(false);
     save(storageKeys.oldText, '');
     save(storageKeys.newText, '');
     save(storageKeys.options, DEFAULT_OPTIONS);
@@ -435,6 +471,14 @@ export default function App() {
     [],
   );
 
+  const handleEditSources = useCallback(() => {
+    setSearchOpen(false);
+    setEditorOpen(true);
+  }, []);
+  const handleCloseEditor = useCallback(() => {
+    setEditorOpen(false);
+  }, []);
+
   const hasInput = oldText !== '' || newText !== '';
 
   const identical =
@@ -451,16 +495,54 @@ export default function App() {
     return { rows: all.slice(0, RENDER_CAP), totalRows: all.length };
   }, [result, options.context, expandedIndices, renderAll]);
 
-  // List of row indices in visibleRows that represent actual differences
-  const changeRowIndices = useMemo(() => {
-    const list: number[] = [];
+  // Syntax highlighting only for reasonably sized diffs (tokenization is
+  // cached per line, but the first pass still costs O(unique lines))
+  const getTokens = useMemo(() => {
+    if (!tokenizer || visibleRows.length > SYNTAX_ROW_CAP) return null;
+    return (line: string) => tokenizer.getTokens(line);
+  }, [tokenizer, visibleRows.length]);
+
+  // Outline of every change row in the visible diff, for the sidebar list
+  const changeEntries = useMemo<ChangeEntry[]>(() => {
+    const list: ChangeEntry[] = [];
     visibleRows.forEach((r, idx) => {
       if (r.kind !== 'equal' && r.kind !== 'gap') {
-        list.push(idx);
+        list.push({
+          rowIndex: idx,
+          kind: r.kind,
+          oldNum: r.oldNum,
+          newNum: r.newNum,
+        });
       }
     });
     return list;
   }, [visibleRows]);
+
+  const listedChanges = useMemo(
+    () => changeEntries.slice(0, CHANGE_LIST_CAP),
+    [changeEntries],
+  );
+
+  const ordinalByRowIndex = useMemo(() => {
+    const m = new Map<number, number>();
+    changeEntries.forEach((entry, i) => m.set(entry.rowIndex, i));
+    return m;
+  }, [changeEntries]);
+
+  const changeRowIndices = useMemo(
+    () => changeEntries.map((e) => e.rowIndex),
+    [changeEntries],
+  );
+
+  const handleSelectChange = useCallback(
+    (rowIndex: number) => {
+      const ord = ordinalByRowIndex.get(rowIndex);
+      if (ord == null) return;
+      setCurrentChangeIndex(ord);
+      setActiveChangeRowIndex(rowIndex);
+    },
+    [ordinalByRowIndex],
+  );
 
   const handleNextChange = useCallback(() => {
     if (changeRowIndices.length === 0) return;
@@ -492,7 +574,7 @@ export default function App() {
         (target.tagName === 'TEXTAREA' ||
           (target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'text'));
 
-      if (e.key === 'Escape' && searchOpen) {
+      if (e.key === 'Escape' && searchOpen && !editorOpen) {
         e.preventDefault();
         setSearchOpen(false);
         return;
@@ -545,9 +627,17 @@ export default function App() {
         return;
       } else if (key === 'e') {
         e.preventDefault();
-        document
-          .querySelector<HTMLTextAreaElement>('.input-panel--left textarea')
-          ?.focus();
+        if (!hasInput) {
+          document
+            .querySelector<HTMLTextAreaElement>('.input-panel--left textarea')
+            ?.focus();
+        } else if (editorOpen) {
+          document
+            .querySelector<HTMLTextAreaElement>('.source-editor .input-panel--left textarea')
+            ?.focus();
+        } else {
+          handleEditSources();
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -557,11 +647,51 @@ export default function App() {
     handleDownloadPatch,
     handleNextChange,
     handlePrevChange,
+    handleEditSources,
     hasInput,
     result,
     identical,
     searchOpen,
+    editorOpen,
   ]);
+
+  const inputPanels = (
+    <>
+      <InputPanel
+        title="Original text"
+        accent="left"
+        value={oldText}
+        onChange={setOldText}
+        onError={showToast}
+        fileName={fileNames.old}
+        onFileInfo={(name) =>
+          setFileNames((names) => ({ ...names, old: name }))
+        }
+      />
+      <div className="panels__swap">
+        <button
+          type="button"
+          className="btn btn--round"
+          onClick={handleSwap}
+          title="Swap original and changed text"
+          aria-label="Swap texts"
+        >
+          <SwapIcon size={18} />
+        </button>
+      </div>
+      <InputPanel
+        title="Changed text"
+        accent="right"
+        value={newText}
+        onChange={setNewText}
+        onError={showToast}
+        fileName={fileNames.new}
+        onFileInfo={(name) =>
+          setFileNames((names) => ({ ...names, new: name }))
+        }
+      />
+    </>
+  );
 
   return (
     <div className="app">
@@ -580,93 +710,70 @@ export default function App() {
         onOpenShortcuts={() => setShortcutsOpen(true)}
       />
 
-      <main id="main-content" className="main">
-        <div className="panels">
-          <InputPanel
-            title="Original text"
-            accent="left"
-            value={oldText}
-            onChange={setOldText}
-            onError={showToast}
-            fileName={fileNames.old}
-            onFileInfo={(name) =>
-              setFileNames((names) => ({ ...names, old: name }))
-            }
-          />
-          <div className="panels__swap">
+      {!hasInput ? (
+        <main id="main-content" className="main main--landing">
+          <div className="panels">{inputPanels}</div>
+
+          <section className="empty" aria-live="polite">
+            <LogoIcon size={44} />
+            <h2>Compare two texts</h2>
+            <p>
+              Paste text or open files in the two panels above. Everything is
+              computed locally in real-time — your text never leaves this
+              device.
+            </p>
             <button
               type="button"
-              className="btn btn--round"
-              onClick={handleSwap}
-              title="Swap original and changed text"
-              aria-label="Swap texts"
+              className="btn btn--primary"
+              onClick={handleLoadSample}
             >
-              <SwapIcon size={18} />
+              Try with sample text
             </button>
-          </div>
-          <InputPanel
-            title="Changed text"
-            accent="right"
-            value={newText}
-            onChange={setNewText}
-            onError={showToast}
-            fileName={fileNames.new}
-            onFileInfo={(name) =>
-              setFileNames((names) => ({ ...names, new: name }))
-            }
+          </section>
+        </main>
+      ) : (
+        <main id="main-content" className="main main--workspace">
+          <SourcesBar
+            oldText={oldText}
+            newText={newText}
+            oldName={fileNames.old}
+            newName={fileNames.new}
+            identical={!!identical}
+            onEdit={handleEditSources}
+            onSwap={handleSwap}
           />
-        </div>
 
-        <OptionsBar
-          options={options}
-          onOptionsChange={setOptions}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          wrap={wrap}
-          onWrapChange={setWrap}
-          lineNumbers={lineNumbers}
-          onLineNumbersChange={setLineNumbers}
-          disabled={!hasInput}
-        />
+          <div className="workspace">
+            <DiffSidebar
+              stats={result?.stats ?? null}
+              identical={!!identical}
+              timeMs={result?.timeMs}
+              totalChanges={changeRowIndices.length}
+              currentChangeIndex={currentChangeIndex}
+              onNextChange={handleNextChange}
+              onPrevChange={handlePrevChange}
+              changes={listedChanges}
+              hiddenChanges={changeEntries.length - listedChanges.length}
+              activeChangeRowIndex={activeChangeRowIndex}
+              onSelectChange={handleSelectChange}
+              options={options}
+              onOptionsChange={setOptions}
+              syntaxEnabled={syntaxEnabled}
+              onSyntaxChange={setSyntaxEnabled}
+            />
 
-        <section className="results" aria-live="polite">
-          {!hasInput && (
-            <div className="empty">
-              <LogoIcon size={44} />
-              <h2>Compare two texts</h2>
-              <p>
-                Paste text or open files in the two panels above. Everything is
-                computed locally in real-time — your text never leaves this
-                device.
-              </p>
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={handleLoadSample}
-              >
-                Try with sample text
-              </button>
-            </div>
-          )}
-
-          {hasInput && result?.aborted && (
-            <div className="notice">
-              <strong>This diff was too large to compute.</strong> Try comparing
-              smaller files, or enable an ignore option to reduce the search
-              space.
-            </div>
-          )}
-
-          {hasInput && result && !result.aborted && result.rows.length > 0 && (
-            <>
-              <StatsBar
-                stats={result.stats}
-                identical={identical}
-                timeMs={result.timeMs}
-                totalChanges={changeRowIndices.length}
-                currentChangeIndex={currentChangeIndex}
-                onNextChange={handleNextChange}
-                onPrevChange={handlePrevChange}
+            <section className="results" aria-live="polite">
+              <DiffToolbar
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
+                wrap={wrap}
+                onWrapChange={setWrap}
+                lineNumbers={lineNumbers}
+                onLineNumbersChange={setLineNumbers}
+                searchOpen={searchOpen}
+                onToggleSearch={() => setSearchOpen((o) => !o)}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
                 onCopyPatch={handleCopyPatch}
                 onDownloadPatch={handleDownloadPatch}
                 onCopyMarkdown={handleCopyMarkdown}
@@ -674,21 +781,30 @@ export default function App() {
                 patchReady={patch !== null}
                 copied={copied}
                 copiedMarkdown={copiedMarkdown}
-                searchOpen={searchOpen}
-                onToggleSearch={() => setSearchOpen((o) => !o)}
-                searchQuery={searchQuery}
-                onSearchChange={setSearchQuery}
               />
-              <DiffView
-                rows={visibleRows}
-                viewMode={viewMode}
-                wrap={wrap}
-                lineNumbers={lineNumbers}
-                searchQuery={searchQuery}
-                activeChangeRowIndex={activeChangeRowIndex}
-                onExpandGap={handleExpandGap}
-                onCopyNotice={showToast}
-              />
+
+              {result?.aborted && (
+                <div className="notice">
+                  <strong>This diff was too large to compute.</strong> Try
+                  comparing smaller files, or enable an ignore option in the
+                  sidebar to reduce the search space.
+                </div>
+              )}
+
+              {result && !result.aborted && result.rows.length > 0 && (
+                <DiffView
+                  rows={visibleRows}
+                  viewMode={viewMode}
+                  wrap={wrap}
+                  lineNumbers={lineNumbers}
+                  searchQuery={searchQuery}
+                  activeChangeRowIndex={activeChangeRowIndex}
+                  onExpandGap={handleExpandGap}
+                  onCopyNotice={showToast}
+                  getTokens={getTokens}
+                />
+              )}
+
               {totalRows > RENDER_CAP && !renderAll && (
                 <div className="notice notice--muted">
                   Showing the first {RENDER_CAP.toLocaleString()} of{' '}
@@ -704,30 +820,28 @@ export default function App() {
                   </button>
                 </div>
               )}
-            </>
-          )}
-        </section>
+            </section>
+          </div>
+        </main>
+      )}
 
-        {computing && hasInput && (
-          <div className="notice notice--muted">Computing differences…</div>
-        )}
-      </main>
-
-      <footer className="footer">
-        <p>
-          OpenDiff — an open source diff checker. Runs entirely in your browser;
-          no data is uploaded anywhere. Built with React, TypeScript and jsdiff.
-          <span style={{ margin: '0 8px', opacity: 0.5 }}>·</span>
-          <button
-            type="button"
-            className="btn btn--ghost btn--small"
-            style={{ padding: '2px 8px', fontSize: 12 }}
-            onClick={() => setShortcutsOpen(true)}
-          >
-            Shortcuts ?
-          </button>
-        </p>
-      </footer>
+      {!hasInput && (
+        <footer className="footer">
+          <p>
+            OpenDiff — an open source diff checker. Runs entirely in your browser;
+            no data is uploaded anywhere. Built with React, TypeScript and jsdiff.
+            <span style={{ margin: '0 8px', opacity: 0.5 }}>·</span>
+            <button
+              type="button"
+              className="btn btn--ghost btn--small"
+              style={{ padding: '2px 8px', fontSize: 12 }}
+              onClick={() => setShortcutsOpen(true)}
+            >
+              Shortcuts ?
+            </button>
+          </p>
+        </footer>
+      )}
 
       {globalDrag && (
         <div className="drop-overlay" aria-hidden="true">
@@ -776,6 +890,25 @@ export default function App() {
           </button>
         </div>
       )}
+
+      <SourceEditorModal
+        isOpen={hasInput && editorOpen}
+        onClose={handleCloseEditor}
+        oldText={oldText}
+        newText={newText}
+        onChangeOld={setOldText}
+        onChangeNew={setNewText}
+        oldFileName={fileNames.old}
+        newFileName={fileNames.new}
+        onFileInfoOld={(name) =>
+          setFileNames((names) => ({ ...names, old: name }))
+        }
+        onFileInfoNew={(name) =>
+          setFileNames((names) => ({ ...names, new: name }))
+        }
+        onError={showToast}
+        onSwap={handleSwap}
+      />
 
       <KeyboardShortcutsModal
         isOpen={shortcutsOpen}
