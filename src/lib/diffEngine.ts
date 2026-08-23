@@ -10,6 +10,16 @@ import type {
 
 const MAX_CHAR_DIFF_LENGTH = 4000;
 const MAX_WORD_DIFF_LENGTH = 20000;
+const NO_NEWLINE_MARKER = '\\ No newline at end of file';
+
+export interface PatchEofOptions {
+  oldNoNewlineAtEof?: boolean;
+  newNoNewlineAtEof?: boolean;
+}
+
+export function hasNoNewlineAtEof(text: string): boolean {
+  return text.length > 0 && !/[\r\n]$/.test(text);
+}
 
 export function splitLines(value: string): string[] {
   const parts = value.split(/\r\n|\r|\n/);
@@ -386,9 +396,21 @@ export function buildUnifiedPatch(
   context: number | 'all',
   oldName = 'original.txt',
   newName = 'changed.txt',
+  eof: PatchEofOptions = {},
 ): string {
   const trimmed = applyContext(rows, context);
   const maxContext = context === 'all' ? Infinity : context;
+
+  let maxOldNum = 0;
+  let maxNewNum = 0;
+  for (const row of rows) {
+    if (row.oldNum !== null && row.oldNum > maxOldNum) maxOldNum = row.oldNum;
+    if (row.newNum !== null && row.newNum > maxNewNum) maxNewNum = row.newNum;
+  }
+  const isLastOldLine = (n: number | null) =>
+    eof.oldNoNewlineAtEof === true && n !== null && n === maxOldNum;
+  const isLastNewLine = (n: number | null) =>
+    eof.newNoNewlineAtEof === true && n !== null && n === maxNewNum;
 
   const lines: string[] = [`--- ${oldName}`, `+++ ${newName}`];
   let prevOld = 0;
@@ -427,6 +449,9 @@ export function buildUnifiedPatch(
         hunk.lines.push(` ${row.oldLine ?? ''}`);
         hunk.oldLen++;
         hunk.newLen++;
+        if (isLastOldLine(row.oldNum) || isLastNewLine(row.newNum)) {
+          hunk.lines.push(NO_NEWLINE_MARKER);
+        }
       } else {
         equalBuffer.push(row);
         if (equalBuffer.length > maxContext) equalBuffer.shift();
@@ -447,10 +472,16 @@ export function buildUnifiedPatch(
     if (row.oldLine !== null) {
       hunk.lines.push(`-${row.oldLine}`);
       hunk.oldLen++;
+      if (isLastOldLine(row.oldNum)) {
+        hunk.lines.push(NO_NEWLINE_MARKER);
+      }
     }
     if (row.newLine !== null) {
       hunk.lines.push(`+${row.newLine}`);
       hunk.newLen++;
+      if (isLastNewLine(row.newNum)) {
+        hunk.lines.push(NO_NEWLINE_MARKER);
+      }
     }
   }
   flushHunk();
@@ -463,8 +494,9 @@ export function buildMarkdownDiff(
   context: number | 'all',
   oldName = 'original.txt',
   newName = 'changed.txt',
+  eof: PatchEofOptions = {},
 ): string {
-  const patch = buildUnifiedPatch(rows, context, oldName, newName);
+  const patch = buildUnifiedPatch(rows, context, oldName, newName, eof);
   return '```diff\n' + patch.trimEnd() + '\n```\n';
 }
 

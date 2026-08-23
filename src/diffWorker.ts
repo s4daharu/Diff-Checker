@@ -1,5 +1,9 @@
 /// <reference lib="webworker" />
-import { computeDiff, buildUnifiedPatch } from './lib/diffEngine';
+import {
+  computeDiff,
+  buildUnifiedPatch,
+  hasNoNewlineAtEof,
+} from './lib/diffEngine';
 import type { DiffOptions, DiffResult } from './lib/types';
 
 interface DiffRequest {
@@ -27,7 +31,10 @@ self.onmessage = (e: MessageEvent<DiffRequest>) => {
       self.postMessage({ id, ok: true, result } satisfies DiffResponse);
       return;
     }
-    const patch = buildUnifiedPatch(result.rows, options.context, oldName, newName);
+    const patch = buildUnifiedPatch(result.rows, options.context, oldName, newName, {
+      oldNoNewlineAtEof: hasNoNewlineAtEof(oldText),
+      newNoNewlineAtEof: hasNoNewlineAtEof(newText),
+    });
     self.postMessage({ id, ok: true, result, patch } satisfies DiffResponse);
   } catch (err) {
     self.postMessage({

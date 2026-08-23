@@ -27,6 +27,7 @@ import {
   applyContext,
   buildHtmlDiffReport,
   buildMarkdownDiff,
+  hasNoNewlineAtEof,
 } from './lib/diffEngine';
 import {
   createLineTokenizer,
@@ -240,6 +241,7 @@ export default function App() {
   }, [syntaxEnabled, syntaxLang, theme]);
   useEffect(() => {
     if (oldText === '' && newText === '') {
+      seqRef.current++;
       setResult(null);
       setPatch(null);
       setComputing(false);
@@ -414,6 +416,10 @@ export default function App() {
         options.context,
         fileNames.old ?? 'original.txt',
         fileNames.new ?? 'changed.txt',
+        {
+          oldNoNewlineAtEof: hasNoNewlineAtEof(oldText),
+          newNoNewlineAtEof: hasNoNewlineAtEof(newText),
+        },
       );
       await navigator.clipboard.writeText(md);
       setCopiedMarkdown(true);
@@ -422,7 +428,7 @@ export default function App() {
     } catch {
       showToast('Could not access the clipboard.');
     }
-  }, [result, options.context, fileNames, showToast]);
+  }, [result, options.context, fileNames, oldText, newText, showToast]);
 
   const triggerDownload = useCallback((blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);

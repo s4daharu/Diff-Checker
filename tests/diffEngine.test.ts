@@ -8,6 +8,7 @@ import {
   countWords,
   formatJson,
   applyTextTransform,
+  hasNoNewlineAtEof,
 } from '../src/lib/diffEngine';
 import type { DiffOptions } from '../src/lib/types';
 import { applyPatch } from 'diff';
@@ -197,6 +198,68 @@ console.log('--- buildMarkdownDiff and buildHtmlDiffReport ---');
   });
   check('html report has doctype', html.includes('<!DOCTYPE html>'));
   check('html report has diff table', html.includes('class="diff-table"'));
+}
+
+console.log('--- no newline at EOF markers ---');
+{
+  const MARKER = '\\ No newline at end of file';
+
+  check('hasNoNewlineAtEof', hasNoNewlineAtEof('a') && !hasNoNewlineAtEof('a\n') && !hasNoNewlineAtEof('a\r\n') && !hasNoNewlineAtEof(''));
+
+  const r = computeDiff('a', 'b', base);
+  const p = buildUnifiedPatch(r.rows, 'all', 'f.txt', 'g.txt', {
+    oldNoNewlineAtEof: true,
+    newNoNewlineAtEof: true,
+  });
+  check(
+    'markers after both - and + lines',
+    p === `--- f.txt\n+++ g.txt\n@@ -1,1 +1,1 @@\n-a\n${MARKER}\n+b\n${MARKER}\n`,
+    p,
+  );
+  check('round-trip both no-newline', applyPatch('a', p) === 'b', applyPatch('a', p));
+
+  const r2 = computeDiff('x\na', 'y\nb\n', base);
+  const p2 = buildUnifiedPatch(r2.rows, 'all', 'f.txt', 'g.txt', { oldNoNewlineAtEof: true });
+  check(
+    'marker only on old side',
+    p2.includes(`-a\n${MARKER}\n`) && !p2.includes(`+b\n${MARKER}`),
+    p2,
+  );
+  check('round-trip old-only no-newline', applyPatch('x\na', p2) === 'y\nb\n');
+
+  const r3 = computeDiff('a\n', 'b\n', base);
+  const p3 = buildUnifiedPatch(r3.rows, 'all', 'f.txt', 'g.txt');
+  check('no markers when both sides end with newline', !p3.includes(MARKER), p3);
+
+  const r4 = computeDiff('q\nz\nlast', 'w\nz\nlast', base);
+  const p4 = buildUnifiedPatch(r4.rows, 'all', 'f', 'g', {
+    oldNoNewlineAtEof: true,
+    newNoNewlineAtEof: true,
+  });
+  check('marker after shared trailing context line', p4.endsWith(` z\n last\n${MARKER}\n`), p4);
+  check('round-trip context no-newline', applyPatch('q\nz\nlast', p4) === 'w\nz\nlast');
+
+  const r5 = computeDiff('1\n2\n3\n4\n5\nno-nl-end', '1\nX\n3\n4\n5\nno-nl-end', base);
+  const p5 = buildUnifiedPatch(r5.rows, 1, 'f', 'g', {
+    oldNoNewlineAtEof: true,
+    newNoNewlineAtEof: true,
+  });
+  check('no marker when last line trimmed out by context', !p5.includes(MARKER), p5);
+
+  const r6 = computeDiff('a', 'b', base);
+  const md = buildMarkdownDiff(r6.rows, 'all', 'a.txt', 'b.txt', {
+    oldNoNewlineAtEof: true,
+    newNoNewlineAtEof: true,
+  });
+  check('markdown diff includes markers', md.includes(MARKER), md);
+
+  const r7 = computeDiff('keep\nold-end', 'keep\nnew-end', base);
+  const p7 = buildUnifiedPatch(r7.rows, 'all', 'f', 'g', { newNoNewlineAtEof: true });
+  check(
+    'marker only on new side',
+    p7.includes(`-old-end\n+new-end\n${MARKER}\n`) && !p7.includes(`-old-end\n${MARKER}`),
+    p7,
+  );
 }
 
 console.log('--- applyContext with expanded gap indices ---');
