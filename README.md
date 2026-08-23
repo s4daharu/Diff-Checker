@@ -1,4 +1,4 @@
-# OpenDiff
+# DiffLens
 
 An open source, privacy-first diff checker that runs entirely in your browser.
 Compare two texts side by side — no data ever leaves your device.

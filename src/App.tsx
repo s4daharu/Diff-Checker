@@ -834,7 +834,7 @@ export default function App() {
       {!hasInput && (
         <footer className="footer">
           <p>
-            OpenDiff — an open source diff checker. Runs entirely in your browser;
+            DiffLens — an open source diff checker. Runs entirely in your browser;
             no data is uploaded anywhere. Built with React, TypeScript and jsdiff.
             <span style={{ margin: '0 8px', opacity: 0.5 }}>·</span>
             <button

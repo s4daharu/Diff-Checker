@@ -51,7 +51,7 @@ export function Header({
       <div className="header__brand">
         <LogoIcon size={30} />
         <div className="header__titles">
-          <span className="header__name">OpenDiff</span>
+          <span className="header__name">DiffLens</span>
           <span className="header__tagline">
             Open source diff checker — runs 100% in your browser
           </span>
